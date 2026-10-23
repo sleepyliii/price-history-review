@@ -1,11 +1,11 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '3.4.0';
+export const VERSION = '3.7.0';
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
  invalidActive:['Price Active is missing or invalid; overlap checking is paused for this group. Re-export using the updated SQL','价格 Active 缺失或无效，暂停该组重叠检查；请用新版 SQL 重新导出'],
  selected:['Selected','选中'],excluded:['Excluded','排除'],review:['Needs confirmation','待确认'],paused:['Paused','暂停'],complete:['Completed','已完成'],partial:['Partial results; confirmation required','部分结果待确认'],
- eligible:['Blanket, Releases > 0 and latest PO date','Blanket、Releases > 0 且 PO 日期最新'],notBlanket:['Not Blanket','不是 Blanket'],noReleases:['Releases is not greater than zero','Releases 不大于零'],older:['A newer eligible PO exists','存在日期更新的合格 PO'],tie:['Latest eligible PO dates are tied; no automatic selection','最新合格 PO 日期并列，不自动选择'],
- missingScope:['Part / specified revision not found in export','导出中未找到指定零件及版本'],noPO:['No eligible Blanket PO with Releases > 0','没有 Blanket 且 Releases > 0 的合格 PO'],metadata:['Inconsistent selection fields within one PO line','同一 PO 明细的筛选字段不一致'],duplicate:['Duplicate price_key; confirmation required','price_key 重复，需要确认'],blocked:['PO selection paused because of an unresolved issue','因存在待确认事项，暂停 PO 选择'],
+ eligible:['Blanket, Releases > 0 and latest PO date','Blanket、Releases > 0 且 PO 日期最新'],fallbackZero:['All Blanket Releases are zero; latest Blanket PO date selected','Blanket 的 Releases 全为零，选取最新 Blanket PO 日期'],notBlanket:['Not Blanket','不是 Blanket'],noReleases:['Zero Releases; a Blanket PO with positive Releases takes priority','Releases 为零，优先选择 Releases > 0 的 Blanket PO'],older:['A newer eligible PO exists','存在日期更新的合格 PO'],tie:['Latest eligible PO dates are tied; no automatic selection','最新合格 PO 日期并列，不自动选择'],
+ missingScope:['Part / specified revision not found in export','导出中未找到指定零件及版本'],noPO:['No eligible Blanket PO','没有合格的 Blanket PO'],metadata:['Inconsistent selection fields within one PO line','同一 PO 明细的筛选字段不一致'],duplicate:['Duplicate price_key; confirmation required','price_key 重复，需要确认'],blocked:['PO selection paused because of an unresolved issue','因存在待确认事项，暂停 PO 选择'],
  unknownPCN:['Blanket mapping is not confirmed for this PCN','此 PCN 的 Blanket 类型映射尚未确认'],typeMismatch:['PO type key and label do not match','PO 类型键与标签不一致'],negativeReleases:['Negative Releases; confirmation required','Releases 为负数，需要确认'],invalidNumber:['Missing or invalid numeric value','数字缺失或无效'],badPODate:['Missing or invalid PO date','PO 日期缺失或无效'],
  missingDate:['Missing effective date; this comparison group is paused','缺少生效日期，暂停该比较组'],reverseDate:['Expiration precedes effective date; this comparison group is paused','失效日期早于生效日期，暂停该比较组'],badDate:['Invalid date or non-midnight price timestamp; confirmation required','日期无效或价格日期含非零时分秒，需要确认'],unknownUnit:['Unit has not been confirmed','单位尚未确认'],missingIdentity:['Currency or unit is missing','币种或单位缺失'],priceMismatch:['Price differs from Raw_Price; use the corrected SQL export','Price 与 Raw_Price 不一致，请使用售价修正版 SQL'],
  firstPrice:['No earlier price; cannot determine a price change','没有更早价格，无法判断是否调价'],ambiguousPrice:['Several prices on one effective date; no unique old/new pairing','同一生效日有多个不同售价，无法唯一配对旧价与新价'],comparison:['Compared with the most recent earlier effective-date price; overlaps are listed separately','对比更早最近生效日的售价；有效期重叠另列'],multiCustomers:['Eligible POs span multiple customers; confirmation required','合格 PO 涉及多个客户，需要确认'],
@@ -72,7 +72,8 @@ export const iso=d=>new Date(d*86400000).toISOString().slice(0,10);
 const key=(...x)=>JSON.stringify(x);
 const groupBy=(rows,fn)=>{const map=new Map();for(const r of rows){const k=fn(r);if(!map.has(k))map.set(k,[]);map.get(k).push(r);}return map;};
 const canonicalUnit=u=>u==='pcs'||u==='Ea'?'Ea':u;
-function context(r){return {part:r.Minth_Part_No||'',revision:r.revision||'',pcn:r.PCN||'',partKey:r.part_key||'',customer:r.customer_code||'',po:r.po_no||'',poKey:r.po_key||'',lineKey:r.po_line_key||'',currency:r.currency_code||'',unit:canonicalUnit(r.unit||'')};}
+export function normalizeRevision(value){const revision=String(value??'').trim();return /^\d$/.test(revision)?'0'+revision:revision;}
+function context(r){return {part:r.Minth_Part_No||'',revision:normalizeRevision(r.revision),pcn:r.PCN||'',partKey:r.part_key||'',customer:r.customer_code||'',po:r.po_no||'',poKey:r.po_key||'',lineKey:r.po_line_key||'',currency:r.currency_code||'',unit:canonicalUnit(r.unit||'')};}
 const groupKey=r=>key(...Object.values(context(r)));
 const sortedPrices=x=>[...x].sort(compare);
 function errorInfo(e){try{return JSON.parse(e.message);}catch{return {code:'invalidNumber',details:String(e.message)};}}
@@ -89,36 +90,38 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  let start,end;try{start=parseDate(startText);end=parseDate(endText);}catch{fail('invalidPeriod');}
  if(start===null||end===null||start>end)fail('invalidPeriod');
  if(!scope.length||scope.some(s=>!s.PartNo||!Object.hasOwn(s,'Revision')))fail('invalidScope');
- scope=[...new Map(scope.map(s=>[key(s.PartNo.trim(),s.Revision.trim()),{PartNo:s.PartNo.trim(),Revision:s.Revision.trim()}])).values()];
+ scope=[...new Map(scope.map(s=>[key(s.PartNo.trim(),normalizeRevision(s.Revision)),{PartNo:s.PartNo.trim(),Revision:normalizeRevision(s.Revision)}])).values()];
  const scopeSet=new Set(scope.map(s=>key(s.PartNo,s.Revision)));
- const matched=rows.filter(r=>scopeSet.has(key(r.Minth_Part_No,r.revision)));
+ const matched=rows.filter(r=>scopeSet.has(key(r.Minth_Part_No,normalizeRevision(r.revision))));
  const report={poSelection:[],priceChanges:[],overlaps:[],coverage:[],issues:[],history:[]};
  const issue=(r,code,details='')=>report.issues.push({...context(r),priceKey:r.price_key||'',sourceRow:r._line||'',code,details});
- for(const s of scope)if(!matched.some(r=>r.Minth_Part_No===s.PartNo&&r.revision===s.Revision))issue({Minth_Part_No:s.PartNo,revision:s.Revision},'missingScope');
+ for(const s of scope)if(!matched.some(r=>r.Minth_Part_No===s.PartNo&&normalizeRevision(r.revision)===s.Revision))issue({Minth_Part_No:s.PartNo,revision:s.Revision},'missingScope');
  const blocked=new Set();
- for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.length>1)for(const r of rr){blocked.add(key(r.PCN,r.part_key));issue(r,'duplicate');}
+ for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.length>1)for(const r of rr){blocked.add(key(r.PCN,r.part_key,r.customer_code));issue(r,'duplicate');}
  const selected=[];
- for(const [pk,pr]of groupBy(matched,r=>key(r.PCN,r.part_key))){
+ for(const [pk,pr]of groupBy(matched,r=>key(r.PCN,r.part_key,r.customer_code))){
   const candidates=[];let block=blocked.has(pk);
   for(const rr of groupBy(pr,r=>r.po_line_key).values()){
    const r=rr[0],item={...context(r),poDate:r.PO_Date,type:r.PO_Type,releases:r.Releases,status:'excluded',reason:'',details:''};report.poSelection.push(item);
    const meta=['po_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Minth_Part_No','revision'];
-   if(meta.some(f=>new Set(rr.map(x=>x[f])).size>1)){issue(r,'metadata');block=true;item.status='review';item.reason='metadata';continue;}
+   if(meta.some(f=>new Set(rr.map(x=>f==='revision'?normalizeRevision(x[f]):x[f])).size>1)){issue(r,'metadata');block=true;item.status='review';item.reason='metadata';continue;}
    try{
     const rel=decimal(r.Releases);if(compare(rel,'0')<0)fail('negativeReleases');
     if(r.PCN!=='269388')fail('unknownPCN',r.PCN);
     if(r.PO_Type!==(r.PO_Type_Key==='2500'?'Blanket':'Other'))fail('typeMismatch');
-    const reasons=[];if(r.PO_Type!=='Blanket')reasons.push('notBlanket');if(compare(rel,'0')<=0)reasons.push('noReleases');
-    if(reasons.length){item.reason=reasons.join('|');continue;}
-    const day=parseDate(r.PO_Date,true);if(day===null)fail('badPODate');item.poDate=iso(day);candidates.push({day,item,rr});
+    if(r.PO_Type!=='Blanket'){item.reason='notBlanket';continue;}
+    candidates.push({rel,item,rr});
    }catch(e){const x=errorInfo(e);issue(r,x.code,x.details);block=true;item.status='review';item.reason=x.code;item.details=x.details||'';}
   }
-  if(new Set(candidates.map(x=>x.item.customer)).size>1){block=true;issue(pr[0],'multiCustomers');}
-  if(block){for(const x of candidates){x.item.status='paused';x.item.reason='blocked';}}
-  else if(!candidates.length)issue(pr[0],'noPO');
+  const hasPositive=candidates.some(x=>compare(x.rel,'0')>0);
+  const pool=candidates.filter(x=>!hasPositive||compare(x.rel,'0')>0);
+  for(const x of candidates)if(!pool.includes(x))x.item.reason='noReleases';
+  for(const x of pool){try{const day=parseDate(x.rr[0].PO_Date,true);if(day===null)fail('badPODate');x.day=day;x.item.poDate=iso(day);}catch(e){const info=errorInfo(e);issue(x.rr[0],info.code,info.details);block=true;x.item.status='review';x.item.reason=info.code;x.item.details=info.details||'';}}
+  if(block){for(const x of pool){if(x.item.status!=='review'){x.item.status='paused';x.item.reason='blocked';}}}
+  else if(!pool.length)issue(pr[0],'noPO');
   else{
-   const latest=Math.max(...candidates.map(x=>x.day)),winners=candidates.filter(x=>x.day===latest);
-   for(const x of candidates){if(x.day<latest)x.item.reason='older';else if(winners.length>1){x.item.status='review';x.item.reason='tie';}else{x.item.status='selected';x.item.reason='eligible';selected.push(...x.rr);}}
+   const latest=Math.max(...pool.map(x=>x.day)),winners=pool.filter(x=>x.day===latest);
+   for(const x of pool){if(x.day<latest)x.item.reason='older';else if(winners.length>1){x.item.status='review';x.item.reason='tie';}else{x.item.status='selected';x.item.reason=hasPositive?'eligible':'fallbackZero';selected.push(...x.rr);}}
    if(winners.length>1)issue(pr[0],'tie');
   }
  }
@@ -169,4 +172,5 @@ export function toCSV(report,name){
  const columns=SCHEMAS[name];const safe=v=>typeof v==='string'&&/^[=+@]/.test(v)?"'"+v:v;
  return '\uFEFF'+[columns.map(k=>quote(COLUMNS[k][0]+' / '+COLUMNS[k][1])).join(','),...report[name].map(r=>columns.map(k=>quote(safe(cell(r,k,'en',true)))).join(','))].join('\r\n')+'\r\n';
 }
+
 
