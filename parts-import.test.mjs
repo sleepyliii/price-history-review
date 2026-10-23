@@ -8,6 +8,9 @@ function book(rows=[['PartNo','Revision'],['DEMO-A',''],['DEMO-B','03']],name='P
  const wb=utils.book_new();utils.book_append_sheet(wb,utils.aoa_to_sheet(rows),name);return wb;
 }
 const data=(wb,type='xlsx')=>write(wb,{bookType:type,type:'array'});
+test('common bilingual aliases, case and separators are recognized',()=>{for(const headers of [['Part No.','Rev'],['PART_NUMBER','REVISION'],['零件号','版本'],['Minth Part No','版本号'],['ＰａｒｔＮｏ','Ｒｅｖ']]){const x=openPartsFile(data(book([headers,['DEMO-A',''],['DEMO-B','03']])),'parts.xlsx');assert.deepEqual(readPartsSheet(x.workbook,'Parts'),scope);}});
+test('CSV aliases work with reordered columns',()=>{const buffer=new TextEncoder().encode('Rev,Notes,Part No.\r\n,note,DEMO-A\r\n03,note,DEMO-B\r\n').buffer;assert.deepEqual(openPartsFile(buffer,'parts.csv').rows,scope);});
+test('ambiguous aliases and unrelated customer part columns are not guessed',()=>{for(const headers of [['PartNo','Rev','Revision'],['PartNo','Part Number','Rev'],['Customer Part No','Rev']]){const x=openPartsFile(data(book([headers,['A','','']])),'parts.xlsx');assert.throws(()=>readPartsSheet(x.workbook,'Parts'),e=>e.code==='listHeaders');}});
 test('xlsx imports text identifiers and explicit blank revisions',()=>{const x=openPartsFile(data(book()),'parts.xlsx');assert.deepEqual(x.sheets,['Parts']);assert.deepEqual(readPartsSheet(x.workbook,'Parts'),scope);});
 test('legacy Excel .xls imports the same list',()=>{const x=openPartsFile(data(book(),'biff8'),'parts.xls');assert.deepEqual(readPartsSheet(x.workbook,'Parts'),scope);});
 test('displayed number formats preserve leading zeros',()=>{const wb=book([['PartNo','Revision'],[123,3]]);wb.Sheets.Parts.A2.z='000000';wb.Sheets.Parts.B2.z='00';const x=openPartsFile(data(wb),'parts.xlsx');assert.deepEqual(readPartsSheet(x.workbook,'Parts'),[{PartNo:'000123',Revision:'03'}]);});

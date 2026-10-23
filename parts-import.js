@@ -3,18 +3,22 @@ import {parseCSV,decodeCSV} from './engine.js';
 export class PartsImportError extends Error {
  constructor(code){super(code);this.code=code;}
 }
+const aliases={part:new Set(['partno','partnumber','minthpartno','零件号','零件编号']),revision:new Set(['revision','rev','版本','版本号'])};
+const normalizeHeader=value=>String(value??'').normalize('NFKC').toLowerCase().replace(/[\s_.\-:：]/g,'');
 function validateHeaders(headers){
- const p=headers.indexOf('PartNo'),r=headers.indexOf('Revision');
- if(p<0||r<0||headers.filter(x=>x==='PartNo').length!==1||headers.filter(x=>x==='Revision').length!==1)throw new PartsImportError('listHeaders');
- return [p,r];
+ const normalized=headers.map(normalizeHeader);
+ const parts=[],revisions=[];
+ normalized.forEach((name,index)=>{if(aliases.part.has(name))parts.push(index);if(aliases.revision.has(name))revisions.push(index);});
+ if(parts.length!==1||revisions.length!==1)throw new PartsImportError('listHeaders');
+ return [parts[0],revisions[0]];
 }
 export function openPartsFile(buffer,name){
  const ext=name.toLowerCase().split('.').pop();
  if(ext==='csv'){
   let data;
   try{data=parseCSV(decodeCSV(buffer));}catch{throw new PartsImportError('partsReadError');}
-  validateHeaders(data.headers);
-  const rows=data.rows.filter(r=>r.PartNo).map(r=>({PartNo:r.PartNo,Revision:r.Revision}));
+  const [p,r]=validateHeaders(data.headers);
+  const rows=data.rows.map(row=>({PartNo:String(row[data.headers[p]]??'').trim(),Revision:String(row[data.headers[r]]??'').trim()})).filter(row=>row.PartNo);
   if(!rows.length)throw new PartsImportError('emptyParts');
   return {sheets:[],rows};
  }
