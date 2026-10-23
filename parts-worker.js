@@ -1,4 +1,4 @@
-import {openPartsFile,readPartsSheet} from './parts-import.js?v=3.3';
+import {openPartsFile,readPartsSheet} from './parts-import.js?v=3.5';
 let workbook=null;
 self.onmessage=({data})=>{
  try{
@@ -10,4 +10,5 @@ self.onmessage=({data})=>{
   }else if(data.action==='sheet')self.postMessage({rows:readPartsSheet(workbook,data.name),sheet:data.name});
  }catch(error){self.postMessage({error:error.code||'partsReadError'});}
 };
+
 

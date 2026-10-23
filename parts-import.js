@@ -3,7 +3,7 @@ import {parseCSV,decodeCSV} from './engine.js';
 export class PartsImportError extends Error {
  constructor(code){super(code);this.code=code;}
 }
-const aliases={part:new Set(['partno','partnumber','minthpartno','零件号','零件编号']),revision:new Set(['revision','rev','版本','版本号'])};
+const aliases={part:new Set(['partno','partnumber','minthpartno','零件号','零件编号']),revision:new Set(['revision','rev','partrevision','partrev','版本','版本号'])};
 const normalizeHeader=value=>String(value??'').normalize('NFKC').toLowerCase().replace(/[\s_.\-:：]/g,'');
 function validateHeaders(headers){
  const normalized=headers.map(normalizeHeader);
@@ -38,3 +38,4 @@ export function readPartsSheet(workbook,name){
  if(!rows.length)throw new PartsImportError('emptyParts');
  return rows;
 }
+
