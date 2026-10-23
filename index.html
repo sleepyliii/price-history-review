@@ -5,41 +5,39 @@
  <meta name="description" content="Review Plex price history, select eligible POs, and find price changes and overlapping prices. English and Chinese. CSV files are processed in your browser.">
  <meta name="referrer" content="no-referrer">
  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; worker-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'">
- <title>Price History Review · 售价检查</title>
- <link rel="stylesheet" href="./style.css"><script type="module" src="./app.js"></script>
+ <title>Customer Price Review · 客户售价检查</title>
+ <link rel="stylesheet" href="./style.css?v=3.1"><script type="module" src="./app.js?v=3.1"></script>
 </head>
 <body>
- <header><div class="brand"><span class="brand-icon" aria-hidden="true">P</span><div><strong data-i="brand">Price History Review</strong><span class="brand-sub" data-i="brandSub">Plex CSV workspace</span></div></div><div class="header-actions"><span class="local-pill"><span></span><span data-i="local">Processed on your device</span></span><button id="language" class="language" aria-label="Switch to Chinese">中文</button></div></header>
+ <header><div class="brand"><strong data-i="brand">Customer Price Review</strong></div><div class="header-actions"><a class="sql-link" href="./Plex_export.sql" download data-i="downloadSQL">Download SQL</a><button id="language" class="language" aria-label="Switch to Chinese">中文</button></div></header>
  <main>
-  <section class="intro"><div><div class="eyebrow" data-i="eyebrow">DAILY PRICE CHECK</div><h1 data-i="title">From price history to a clear review.</h1><p data-i="subtitle">Select your Plex export, specify parts and revisions, and check a reporting period.</p></div><button id="demo" class="secondary" data-i="demo">Try a fictional example</button></section>
+  <section class="intro"><p data-i="subtitle">Select a period, import the customer price export and a part list, then review selling-price details, changes and overlaps.</p><button id="demo" class="secondary" data-i="demo">Load example</button></section>
   <div class="workspace">
    <aside class="panel inputs">
-    <div class="panel-title"><span class="step">1</span><h2 data-i="inputTitle">Prepare your check</h2></div>
-    <label class="label" for="source" data-i="exportLabel">Plex CSV export</label>
-    <label class="drop" id="drop" for="source"><span class="file-symbol" aria-hidden="true">↑</span><strong data-i="chooseFile">Choose a CSV or drop it here</strong><span data-i="corrected">Use the corrected price-history SQL export.</span><input id="source" type="file" accept=".csv,text/csv"></label>
+    <div class="panel-title"><h2 data-i="inputTitle">Check settings</h2></div>
+    <div class="dates"><div><label for="start" class="label" data-i="start">Start date</label><input id="start" type="date" value="2026-10-01"></div><div><label for="end" class="label" data-i="end">End date</label><input id="end" type="date" value="2026-10-21"></div></div>
+    <label class="label" for="source" data-i="exportLabel">Customer price data (CSV)</label>
+    <label class="drop" id="drop" for="source"><strong data-i="chooseFile">Choose a CSV or drop it here</strong><input id="source" type="file" accept=".csv,text/csv"></label>
     <div id="file-info" class="file-info" role="status" hidden></div>
-    <div class="privacy" data-i="privacy">Your CSV stays in this browser. It is not uploaded or saved on a server.</div>
     <div class="section-label"><label class="label" data-i="scope">Parts and revisions</label><button id="import-parts" class="text-button" data-i="importParts">Import list CSV</button><input id="parts-file" type="file" accept=".csv" hidden></div>
     <table class="scope-table"><thead><tr><th data-i="part">Part No.</th><th data-i="revision">Revision</th><th><span class="sr-only" data-i="remove">Remove</span></th></tr></thead><tbody id="scope-rows"></tbody></table>
     <button id="add-part" class="text-button add" data-i="addPart">+ Add a part</button>
-    <p class="hint" data-i="blankRevision">Blank revision matches the system’s blank revision only, not all revisions.</p>
-    <div class="dates"><div><label for="start" class="label" data-i="start">Start date</label><input id="start" type="date" value="2026-10-01"></div><div><label for="end" class="label" data-i="end">End date</label><input id="end" type="date" value="2026-10-21"></div></div>
+    <p class="hint" data-i="blankRevision">Leave Revision empty for the blank version.</p>
     <button id="run" class="primary" data-i="run">Run price check</button>
     <div id="progress" class="progress" role="status" aria-live="polite" hidden></div>
     <div id="error" class="error" role="alert" hidden></div>
     <details class="rules"><summary data-i="rules">Review rules</summary><ul><li data-i="rulePO">Blanket with Releases > 0; select the latest PO date.</li><li data-i="ruleTie">Compare calendar dates only. Tied latest POs require confirmation.</li><li data-i="rulePrice">Price comes directly from PR.Price. Component counts do not multiply the price.</li><li data-i="ruleDates">Expiration is inclusive. A blank expiration stays effective.</li><li data-i="ruleInvalid">Missing effective dates or reversed date ranges pause the affected group.</li><li data-i="ruleUnit">pcs and Ea are equivalent; other unconfirmed cases are listed for review.</li></ul></details>
    </aside>
    <section class="results" aria-labelledby="result-title">
-    <div class="result-heading"><div><div class="eyebrow" data-i="resultsEyebrow">REVIEW RESULTS</div><h2 id="result-title" data-i="resultTitle">Your check, in one place.</h2><p id="result-period" class="muted"></p></div><button id="download-all" class="secondary" disabled data-i="downloadAll">Download reports (.zip)</button></div>
+    <div class="result-heading"><div><h2 id="result-title" data-i="resultTitle">Results</h2><p id="result-period" class="muted"></p></div><button id="download-all" class="secondary" disabled data-i="downloadAll">Download reports (.zip)</button></div>
     <div id="stats" class="stats" hidden></div>
     <div class="panel result-panel">
-     <div id="empty" class="empty"><div class="empty-mark" aria-hidden="true">≡</div><h3 data-i="emptyTitle">Ready when your data is.</h3><p data-i="emptyText">Your PO decisions, price changes, overlaps and items requiring confirmation will appear here.</p><div class="empty-steps"><span data-i="stepFile">01 · Choose CSV</span><span data-i="stepScope">02 · Set scope</span><span data-i="stepReview">03 · Review results</span></div></div>
+     <div id="empty" class="empty"><h3 data-i="emptyTitle">No results yet</h3><p data-i="emptyText">Import your price data and part list, then run the check.</p></div>
      <div id="report" hidden><nav class="tabs" id="tabs" aria-label="Reports"></nav><div class="table-toolbar"><div><h3 id="table-title"></h3><p id="table-note" class="hint"></p></div><button id="download-one" class="text-button" data-i="downloadOne">Download CSV</button></div><div class="table-scroll"><table class="data-table"><thead id="result-head"></thead><tbody id="result-body"></tbody></table></div><div id="pagination" class="pagination"></div></div>
     </div>
-    <p class="result-footnote" data-i="footnote">Previous price means the most recent earlier effective-date price, not necessarily the unique executing price. Check the overlap report alongside price changes.</p>
    </section>
   </div>
  </main>
- <footer><span data-i="footer">A repeatable review, with your data kept local.</span><span>v3.0 · EN / 中文</span></footer>
+ <footer><span data-i="footer">Plex customer price review</span><span>v3.1 · EN / 中文</span></footer>
 </body>
 </html>
