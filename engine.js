@@ -1,7 +1,8 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '3.0.0';
+export const VERSION = '3.4.0';
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ invalidActive:['Price Active is missing or invalid; overlap checking is paused for this group. Re-export using the updated SQL','价格 Active 缺失或无效，暂停该组重叠检查；请用新版 SQL 重新导出'],
  selected:['Selected','选中'],excluded:['Excluded','排除'],review:['Needs confirmation','待确认'],paused:['Paused','暂停'],complete:['Completed','已完成'],partial:['Partial results; confirmation required','部分结果待确认'],
  eligible:['Blanket, Releases > 0 and latest PO date','Blanket、Releases > 0 且 PO 日期最新'],notBlanket:['Not Blanket','不是 Blanket'],noReleases:['Releases is not greater than zero','Releases 不大于零'],older:['A newer eligible PO exists','存在日期更新的合格 PO'],tie:['Latest eligible PO dates are tied; no automatic selection','最新合格 PO 日期并列，不自动选择'],
  missingScope:['Part / specified revision not found in export','导出中未找到指定零件及版本'],noPO:['No eligible Blanket PO with Releases > 0','没有 Blanket 且 Releases > 0 的合格 PO'],metadata:['Inconsistent selection fields within one PO line','同一 PO 明细的筛选字段不一致'],duplicate:['Duplicate price_key; confirmation required','price_key 重复，需要确认'],blocked:['PO selection paused because of an unresolved issue','因存在待确认事项，暂停 PO 选择'],
@@ -124,13 +125,14 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  const blockedDates=new Set();
  for(const r of selected){try{const a=parseDate(r.effective_date),b=parseDate(r.expiration_date);if(a===null||(b!==null&&b<a))blockedDates.add(groupKey(r));}catch{blockedDates.add(groupKey(r));}}
  for(const rr of groupBy(selected,r=>key(groupKey(r),r.customer_part_no,r.customer_part_revision)).values()){
-  const first=rr[0],base=context(first);let invalid=blockedDates.has(groupKey(first));const dedup=new Map();
+  const first=rr[0],base=context(first);let invalid=blockedDates.has(groupKey(first)),activeInvalid=false;const dedup=new Map(),activeDedup=new Map();
   for(const r of rr){
-   report.history.push({...context(r),customerPart:r.customer_part_no,customerRevision:r.customer_part_revision,priceKey:r.price_key,price:r.Price,originalUnit:r.unit,effective:r.effective_date,expiration:r.expiration_date,componentCount:r.Component_Count,componentReview:r.Component_Needs_Review,sourceRow:r._line});
+   report.history.push({...context(r),customerPart:r.customer_part_no,customerRevision:r.customer_part_revision,priceKey:r.price_key,price:r.Price,priceActive:r.Price_Active??'',originalUnit:r.unit,effective:r.effective_date,expiration:r.expiration_date,componentCount:r.Component_Count,componentReview:r.Component_Needs_Review,sourceRow:r._line});
+   if(!['0','1'].includes(r.Price_Active)){activeInvalid=true;issue(r,'invalidActive');}
    try{
     if(!r.currency_code||!r.unit)fail('missingIdentity');if(!['pcs','Ea'].includes(r.unit))fail('unknownUnit',r.unit);
     const price=decimal(r.Price);if(compare(price,decimal(r.Raw_Price))!==0)fail('priceMismatch');
-    const a=parseDate(r.effective_date),b=parseDate(r.expiration_date);if(a===null)fail('missingDate');if(b!==null&&b<a)fail('reverseDate');dedup.set(key(price,a,b),{price,start:a,end:b});
+    const a=parseDate(r.effective_date),b=parseDate(r.expiration_date);if(a===null)fail('missingDate');if(b!==null&&b<a)fail('reverseDate');const record={price,start:a,end:b};dedup.set(key(price,a,b),record);if(r.Price_Active==='1')activeDedup.set(key(price,a,b),record);
    }catch(e){invalid=true;const x=errorInfo(e);issue(r,x.code,x.details);}
   }
   const rec=[...dedup.values()],coverage={...base,status:invalid?'paused':'complete',rawRows:rr.length,intervals:rec.length,changeCount:'',overlapCount:''};
@@ -145,18 +147,18 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
     }
     previous=prices;
    }
-   for(const s of overlapping(rec,start,end))report.overlaps.push({...base,start:iso(s.start),end:iso(s.end),distinctCount:s.prices.length,prices:s.prices.join('; ')});
-   coverage.changeCount=report.priceChanges.length-oldChanges;coverage.overlapCount=report.overlaps.length-oldOverlaps;if(pending)coverage.status='partial';
+   if(!activeInvalid)for(const s of overlapping([...activeDedup.values()],start,end))report.overlaps.push({...base,start:iso(s.start),end:iso(s.end),distinctCount:s.prices.length,prices:s.prices.join('; ')});
+   coverage.changeCount=report.priceChanges.length-oldChanges;coverage.overlapCount=activeInvalid?'':report.overlaps.length-oldOverlaps;if(pending||activeInvalid)coverage.status='partial';
   }
   report.coverage.push(coverage);
  }
  report.summary={version:VERSION,source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length};
  return report;
 }
-export const COLUMNS={part:['Part No.','零件号'],revision:['Revision','版本'],pcn:['PCN','PCN'],partKey:['Part key','零件键'],customer:['Customer','客户'],po:['PO','PO'],poKey:['PO key','PO键'],lineKey:['PO line key','PO明细键'],currency:['Currency','币种'],unit:['Comparison unit','比较单位'],poDate:['PO date','PO日期'],type:['PO type','PO类型'],releases:['Releases','Releases数量'],status:['Status','状态'],reason:['Reason','原因'],effective:['Effective date','生效日'],oldPrice:['Previous price','前序价格'],newPrice:['New price','新价格'],difference:['Difference','差额'],note:['Note','说明'],start:['Start date','开始日期'],end:['End date','结束日期'],distinctCount:['Distinct prices','不同售价数量'],prices:['Prices','售价列表'],rawRows:['Source price rows','原始价格行数'],intervals:['Analysis intervals','分析区间数'],changeCount:['Changes','调价事件数'],overlapCount:['Overlap intervals','重叠区间数'],priceKey:['Price key','价格键'],sourceRow:['CSV row','CSV行号'],code:['Issue','问题'],customerPart:['Customer part No.','客户零件号'],customerRevision:['Customer revision','客户版本'],price:['Price','售价'],originalUnit:['Original unit','原始单位'],expiration:['Expiration date','失效日'],componentCount:['Component count','组件数量'],componentReview:['Component review flag','组件核对标记']};
+export const COLUMNS={part:['Part No.','零件号'],revision:['Revision','版本'],pcn:['PCN','PCN'],partKey:['Part key','零件键'],customer:['Customer','客户'],po:['PO','PO'],poKey:['PO key','PO键'],lineKey:['PO line key','PO明细键'],currency:['Currency','币种'],unit:['Comparison unit','比较单位'],poDate:['PO date','PO日期'],type:['PO type','PO类型'],releases:['Releases','Releases数量'],status:['Status','状态'],reason:['Reason','原因'],effective:['Effective date','生效日'],oldPrice:['Previous price','前序价格'],newPrice:['New price','新价格'],difference:['Difference','差额'],note:['Note','说明'],start:['Start date','开始日期'],end:['End date','结束日期'],distinctCount:['Distinct prices','不同售价数量'],prices:['Prices','售价列表'],rawRows:['Source price rows','原始价格行数'],intervals:['Analysis intervals','分析区间数'],changeCount:['Changes','调价事件数'],overlapCount:['Overlap intervals','重叠区间数'],priceKey:['Price key','价格键'],sourceRow:['CSV row','CSV行号'],code:['Issue','问题'],customerPart:['Customer part No.','客户零件号'],customerRevision:['Customer revision','客户版本'],price:['Price','售价'],originalUnit:['Original unit','原始单位'],expiration:['Expiration date','失效日'],componentCount:['Component count','组件数量'],componentReview:['Component review flag','组件核对标记'],priceActive:['Price Active (current)','价格Active（当前）']};
 const BASE=['part','revision','customer','po','currency','unit','pcn','partKey','poKey','lineKey'];
 const TRACE=['pcn','partKey','poKey','lineKey'];
-export const SCHEMAS={poSelection:['part','revision','customer','po','poDate','type','releases','status','reason',...TRACE],priceChanges:['part','revision','customer','po','effective','oldPrice','newPrice','difference','currency','unit','note',...TRACE],overlaps:['part','revision','customer','po','start','end','distinctCount','prices','currency','unit',...TRACE],coverage:['part','revision','customer','po','status','rawRows','intervals','changeCount','overlapCount','currency','unit',...TRACE],issues:['part','revision','customer','po','code','priceKey','sourceRow','currency','unit',...TRACE],history:['part','revision','customer','po','price','effective','expiration','currency','originalUnit','customerPart','customerRevision','priceKey','sourceRow','unit','componentCount','componentReview',...TRACE]};
+export const SCHEMAS={poSelection:['part','revision','customer','po','poDate','type','releases','status','reason',...TRACE],priceChanges:['part','revision','customer','po','effective','oldPrice','newPrice','difference','currency','unit','note',...TRACE],overlaps:['part','revision','customer','po','start','end','distinctCount','prices','currency','unit',...TRACE],coverage:['part','revision','customer','po','status','rawRows','intervals','changeCount','overlapCount','currency','unit',...TRACE],issues:['part','revision','customer','po','code','priceKey','sourceRow','currency','unit',...TRACE],history:['part','revision','customer','po','price','priceActive','effective','expiration','currency','originalUnit','customerPart','customerRevision','priceKey','sourceRow','unit','componentCount','componentReview',...TRACE]};
 export function cell(row,field,lang='en',both=false){
  const v=row[field]??'';
  if(['status','reason','note','code'].includes(field)&&v){return String(v).split('|').map(c=>both?bilingual(c,row.details||''):message(c,row.details||'',lang)).join('; ');}
@@ -167,3 +169,4 @@ export function toCSV(report,name){
  const columns=SCHEMAS[name];const safe=v=>typeof v==='string'&&/^[=+@]/.test(v)?"'"+v:v;
  return '\uFEFF'+[columns.map(k=>quote(COLUMNS[k][0]+' / '+COLUMNS[k][1])).join(','),...report[name].map(r=>columns.map(k=>quote(safe(cell(r,k,'en',true)))).join(','))].join('\r\n')+'\r\n';
 }
+

@@ -1,10 +1,10 @@
-﻿/*
+/*
 Customer price export / 客户价格底表导出
 Includes complete price history, PO metadata and current active Releases.
 导出完整价格历史、PO信息及当前有效Releases；可用下方前缀参数缩小范围。
 Price = PR.Price. Components are retained for review, not summed into the price.
 售价直接取PR.Price，组件数量仅供核对。
-Keep full price history; choose the reporting period in the review tool.
+Keep full price history including inactive prices. Price_Active is current state, not historical state.
 请保留完整价格历史，在网页工具中选择检查期间。
 Blanket type key 2500 is validated for PCN 269388.
 */
@@ -85,6 +85,7 @@ SELECT
     CP.customer_part_revision,
     PR.Price AS Price,
     PR.Price AS Raw_Price,
+    PR.active AS Price_Active,
     COALESCE(PCC.Component_Count, 0) AS Component_Count,
     CASE
         WHEN COALESCE(PCC.Component_Count, 0) <> 1 THEN 1
@@ -129,3 +130,4 @@ ORDER BY P.part_no, C.customer_code, PO.po_no, POL.po_line_key, PR.effective_dat
 
 DROP TABLE #PriceComponentCounts;
 DROP TABLE #ReleaseByPOLine;
+

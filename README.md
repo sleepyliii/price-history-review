@@ -23,6 +23,8 @@ flowchart LR
 3. Set start/end dates and run. Empty Revision means the blank version only. / 设置起止日期并运行；版本留空仅匹配系统空白版本。
 4. Review PO selection and pending items, then download bilingual reports. / 核对 PO 筛选与待确认事项，下载双语报告。
 
+Overlap checks require `Price_Active` from the updated SQL. Only currently active prices participate; inactive records remain in history and price-change comparisons. / 重叠检查需要新版 SQL 的 `Price_Active` 列；仅纳入当前有效价格，inactive 记录仍保留在历史和调价比较中。
+
 ## Reports / 输出
 
 PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history
@@ -34,5 +36,6 @@ PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 
 `python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
+
 
 
