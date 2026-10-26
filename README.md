@@ -31,6 +31,8 @@ When the latest earlier effective date has multiple old prices, prefer the price
 
 GM group: GMNA, GM-NA 1, GMCCA, GM Canada SPO, GM Henniges, GM Henniges SPO. Re-export with the updated SQL to include approved Ship-to keys, codes, status and Releases. GM selects the latest batch per customer/Ship-to and retains same-day POs. All branches must have the same valid price, currency and unit on the period end date to confirm a common price; unresolved branches stay pending. / GM 按客户＋Ship-to 选最新批次并保留同日 PO；需用新版 SQL 重新导出地址、状态和地址级 Releases。以检查结束日比价，价格、币种和单位一致且无未确定分支才确认共同售价。
 
+All customer/PO prices are rounded half-up to four decimal places before changes, overlaps and GM consistency checks. Original amounts remain in the history export. / 所有客户及 PO 的售价均先四舍五入至四位，再检查调价、重叠及 GM 一致性；历史导出保留原始金额。
+
 ## Reports / 输出
 
 PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history · GM current prices · GM price consistency
@@ -39,9 +41,10 @@ PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 
 
 ## Local development / 本机开发
 
-`python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs gm.test.mjs`
+`python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs gm.test.mjs precision.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
+
 
 
 

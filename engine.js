@@ -1,5 +1,5 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.0.0';
+export const VERSION = '4.1.0';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
 const GM_FIELDS=['Ship_To_Key','Ship_To_Code','Ship_To_Releases','Ship_To_Active'];
@@ -68,6 +68,17 @@ export function decimal(s) {
  let [whole,fraction='']=s.split('.'); whole=whole.replace(/^0+(?=\d)/,'');fraction=fraction.replace(/0+$/,'');
  if(whole==='0'&&!fraction)sign='';return sign+whole+(fraction?'.'+fraction:'');
 }
+// Price-only decimal rounding: half-up to four places, using integers (including negative ties).
+export function price4(value){
+ const valueText=decimal(value),negative=valueText.startsWith('-'),absolute=negative?valueText.slice(1):valueText;
+ const [whole,fraction='']=absolute.split('.');
+ let scaled=BigInt(whole)*10000n+BigInt((fraction+'0000').slice(0,4));
+ if(fraction.length>4&&fraction[4]>='5')scaled+=1n;
+ const digits=scaled.toString().padStart(5,'0');
+ return decimal((negative?'-':'')+digits.slice(0,-4)+'.'+digits.slice(-4));
+}
+export function formatPrice(value){const text=price4(value),[whole,fraction='']=text.split('.');return whole+'.'+fraction.padEnd(4,'0');}
+const priceIdentity=value=>{try{return price4(value);}catch{return String(value??'');}};
 function integerParts(s) {s=decimal(s);const scale=(s.split('.')[1]||'').length;return {n:BigInt(s.replace('.','')),scale};}
 export function compare(a,b) {const x=integerParts(a),y=integerParts(b),n=Math.max(x.scale,y.scale);const z=x.n*10n**BigInt(n-x.scale)-y.n*10n**BigInt(n-y.scale);return z<0n?-1:z>0n?1:0;}
 export function subtract(a,b) { const x=integerParts(a),y=integerParts(b),scale=Math.max(x.scale,y.scale);let n=x.n*10n**BigInt(scale-x.scale)-y.n*10n**BigInt(scale-y.scale);const negative=n<0n;if(negative)n=-n;let s=n.toString().padStart(scale+1,'0');if(scale)s=s.slice(0,-scale)+'.'+s.slice(-scale);return decimal((negative?'-':'')+s); }
@@ -99,7 +110,7 @@ function errorInfo(e){try{return JSON.parse(e.message);}catch{return {code:'inva
 export function overlapping(records,start,end){
  const events=new Map();const boundaries=new Set([start,end+1]);
  const event=(day,price,delta)=>{if(!events.has(day))events.set(day,new Map());const m=events.get(day);m.set(price,(m.get(price)||0)+delta);};
- for(const r of records){const a=Math.max(start,r.start),b=Math.min(end,r.end??end);if(a>b)continue;boundaries.add(a);boundaries.add(b+1);event(a,r.price,1);event(b+1,r.price,-1);}
+ for(const r of records){const a=Math.max(start,r.start),b=Math.min(end,r.end??end);if(a>b)continue;const price=price4(r.price);boundaries.add(a);boundaries.add(b+1);event(a,price,1);event(b+1,price,-1);}
  const days=[...boundaries].sort((a,b)=>a-b),active=new Map(),out=[];
  for(let i=0;i<days.length-1;i++){const day=days[i];for(const [p,n]of events.get(day)||[])active.set(p,(active.get(p)||0)+n);const prices=sortedPrices([...active].filter(([,n])=>n>0).map(([p])=>p));if(prices.length<2)continue;const last=out.at(-1);if(last&&last.end+1===day&&key(last.prices)===key(prices))last.end=days[i+1]-1;else out.push({start:day,end:days[i+1]-1,prices});}
  return out;
@@ -120,13 +131,13 @@ function buildGMReports(report,matched,selected,asOf,issue){
      if(a===null||(b!==null&&b<a))fail('gmInvalidPrice');
      if(a>asOf||(b!==null&&b<asOf))continue;
      if(!r.currency_code||!['pcs','Ea'].includes(r.unit))fail('gmBasis');
-     const price=decimal(r.Price);if(compare(price,decimal(r.Raw_Price))!==0)fail('gmInvalidPrice');
+     const price=price4(r.Price);if(compare(price,price4(r.Raw_Price))!==0)fail('gmInvalidPrice');
      effective.push({price,currency:r.currency_code,unit:canonicalUnit(r.unit),priceKey:r.price_key});
     }
     if(!effective.length)fail('gmNoPrice');
     if(new Set(effective.map(r=>key(r.currency,r.unit))).size!==1)fail('gmBasis');
     const amounts=sortedPrices(new Set(effective.map(r=>r.price)));
-    if(amounts.length!==1)fail('gmManyPrices',amounts.join('; '));
+    if(amounts.length!==1)fail('gmManyPrices',amounts.map(formatPrice).join('; '));
     Object.assign(row,{price:amounts[0],currency:effective[0].currency,unit:effective[0].unit,priceKeys:[...new Set(effective.map(r=>r.priceKey))].join('; '),status:'complete',reason:'gmCurrent'});
    }catch(e){const info=errorInfo(e);row.reason=['gmNoPrice','gmManyPrices','gmBasis'].includes(info.code)?info.code:'gmInvalidPrice';row.details=iso(asOf)+(info.details?' · '+info.details:'');issue(first,row.reason,row.details);}
    report.gmCurrent.push(row);
@@ -137,7 +148,7 @@ function buildGMReports(report,matched,selected,asOf,issue){
   const bases=new Set(valid.map(r=>key(r.currency,r.unit))),oneBasis=bases.size===1;
   const prices=oneBasis?sortedPrices(new Set(valid.map(r=>r.price))):[];
   let reason=bases.size>1?'gmBasis':prices.length>1?'gmMismatch':unresolved||!valid.length?'gmIncomplete':'gmEqual';
-  const details=rr.map(r=>[r.customer,r.shipTo||'?',r.po||'?',r.status==='complete'?r.price+' '+r.currency+'/'+r.unit:bilingual(r.reason)].join(' · ')).join(' | ');
+  const details=rr.map(r=>[r.customer,r.shipTo||'?',r.po||'?',r.status==='complete'?formatPrice(r.price)+' '+r.currency+'/'+r.unit:bilingual(r.reason)].join(' · ')).join(' | ');
   report.gmConsistency.push({part:first.part,revision:first.revision,pcn:first.pcn,asOf:iso(asOf),commonPrice:reason==='gmEqual'?prices[0]:'',currency:oneBasis?valid[0].currency:'',unit:oneBasis?valid[0].unit:'',distinctCount:oneBasis?prices.length:'',prices:prices.join('; '),difference:oneBasis&&prices.length?subtract(prices.at(-1),prices[0]):'',branchCount:new Set(rr.map(r=>key(r.customer,r.shipToKey))).size,poCount:rr.filter(r=>r.po).length,status:reason==='gmEqual'?'complete':reason==='gmIncomplete'?'partial':'review',reason,gmMembers:details});
   if(['gmMismatch','gmBasis'].includes(reason)){
    const source=gmRows.find(r=>r.PCN===first.pcn&&r.Minth_Part_No===first.part&&normalizeRevision(r.revision)===first.revision);
@@ -159,7 +170,7 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  const blocked=new Set();
  for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key,isGM(r)?r.Ship_To_Key||'':'')).values())if(rr.length>1)for(const r of rr){blocked.add(selectionKey(r));issue(r,'duplicate');}
  // A shared GM price_key may repeat across addresses, but its source price must agree.
- for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.some(isGM)&&['part_key','Minth_Part_No','revision','po_key','po_line_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Price','Raw_Price','Price_Active','effective_date','expiration_date','unit','currency_code','customer_part_no','customer_part_revision'].some(f=>new Set(rr.map(r=>r[f])).size>1))for(const r of rr){blocked.add(selectionKey(r));issue(r,'metadata');}
+ for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.some(isGM)&&['part_key','Minth_Part_No','revision','po_key','po_line_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Price','Raw_Price','Price_Active','effective_date','expiration_date','unit','currency_code','customer_part_no','customer_part_revision'].some(f=>new Set(rr.map(r=>['Price','Raw_Price'].includes(f)?priceIdentity(r[f]):r[f])).size>1))for(const r of rr){blocked.add(selectionKey(r));issue(r,'metadata');}
  const selected=[];
  for(const [pk,pr]of groupBy(matched,selectionKey)){
   const candidates=[];let block=blocked.has(pk);
@@ -194,11 +205,11 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  for(const rr of groupBy(selected,r=>key(groupKey(r),r.customer_part_no,r.customer_part_revision)).values()){
   const first=rr[0],base=context(first);let invalid=blockedDates.has(groupKey(first)),activeInvalid=false;const dedup=new Map(),activeDedup=new Map();
   for(const r of rr){
-   report.history.push({...context(r),customerPart:r.customer_part_no,customerRevision:r.customer_part_revision,priceKey:r.price_key,price:r.Price,priceActive:r.Price_Active??'',originalUnit:r.unit,effective:r.effective_date,expiration:r.expiration_date,componentCount:r.Component_Count,componentReview:r.Component_Needs_Review,sourceRow:r._line});
+   report.history.push({...context(r),customerPart:r.customer_part_no,customerRevision:r.customer_part_revision,priceKey:r.price_key,price:priceIdentity(r.Price),sourcePrice:r.Price,sourceRawPrice:r.Raw_Price,priceActive:r.Price_Active??'',originalUnit:r.unit,effective:r.effective_date,expiration:r.expiration_date,componentCount:r.Component_Count,componentReview:r.Component_Needs_Review,sourceRow:r._line});
    if(!['0','1'].includes(r.Price_Active)){activeInvalid=true;issue(r,'invalidActive');}
    try{
     if(!r.currency_code||!r.unit)fail('missingIdentity');if(!['pcs','Ea'].includes(r.unit))fail('unknownUnit',r.unit);
-    const price=decimal(r.Price);if(compare(price,decimal(r.Raw_Price))!==0)fail('priceMismatch');
+    const price=price4(r.Price);if(compare(price,price4(r.Raw_Price))!==0)fail('priceMismatch');
     const a=parseDate(r.effective_date),b=parseDate(r.expiration_date);if(a===null)fail('missingDate');if(b!==null&&b<a)fail('reverseDate');const record={price,start:a,end:b};dedup.set(key(price,a,b),record);if(r.Price_Active==='1')activeDedup.set(key(price,a,b),record);
    }catch(e){invalid=true;const x=errorInfo(e);issue(r,x.code,x.details);}
   }
@@ -212,7 +223,7 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
      else{
       let oldPrices=previous,note='comparison';
       if(previous.length>1){const expiring=sortedPrices(new Set(previousRecords.filter(r=>r.end===day-1).map(r=>r.price)));if(expiring.length===1){oldPrices=expiring;note='comparisonExpiration';}}
-      if(oldPrices.length!==1||prices.length!==1){issue(first,'ambiguousPrice','New effective date / 新价生效日: '+iso(day)+'; Previous effective date / 前序生效日: '+iso(previousDay)+'; Previous prices / 前序售价: '+previous.join('; ')+'; New prices / 新售价: '+prices.join('; '));pending=true;}
+      if(oldPrices.length!==1||prices.length!==1){issue(first,'ambiguousPrice','New effective date / 新价生效日: '+iso(day)+'; Previous effective date / 前序生效日: '+iso(previousDay)+'; Previous prices / 前序售价: '+previous.map(formatPrice).join('; ')+'; New prices / 新售价: '+prices.map(formatPrice).join('; '));pending=true;}
       else if(compare(oldPrices[0],prices[0])!==0)report.priceChanges.push({...base,effective:iso(day),oldPrice:oldPrices[0],newPrice:prices[0],difference:subtract(prices[0],oldPrices[0]),note});
      }
     }
@@ -224,7 +235,7 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   report.coverage.push(coverage);
  }
  buildGMReports(report,matched,selected,end,issue);
- report.summary={version:VERSION,source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length,gmAsOf:iso(end),gmGroups:report.gmConsistency.length};
+ report.summary={version:VERSION,priceDecimals:4,priceRounding:'half_up',source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length,gmAsOf:iso(end),gmGroups:report.gmConsistency.length};
  return report;
 }
 export const COLUMNS={part:['Part No.','零件号'],revision:['Revision','版本'],pcn:['PCN','PCN'],partKey:['Part key','零件键'],customer:['Customer','客户'],po:['PO','PO'],poKey:['PO key','PO键'],lineKey:['PO line key','PO明细键'],currency:['Currency','币种'],unit:['Comparison unit','比较单位'],poDate:['PO date','PO日期'],type:['PO type','PO类型'],releases:['Releases','Releases数量'],status:['Status','状态'],reason:['Reason','原因'],effective:['Effective date','生效日'],oldPrice:['Previous price','前序价格'],newPrice:['New price','新价格'],difference:['Difference','差额'],note:['Note','说明'],start:['Start date','开始日期'],end:['End date','结束日期'],distinctCount:['Distinct prices','不同售价数量'],prices:['Prices','售价列表'],rawRows:['Source price rows','原始价格行数'],intervals:['Analysis intervals','分析区间数'],changeCount:['Changes','调价事件数'],overlapCount:['Overlap intervals','重叠区间数'],priceKey:['Price key','价格键'],sourceRow:['CSV row','CSV行号'],code:['Issue','问题'],customerPart:['Customer part No.','客户零件号'],customerRevision:['Customer revision','客户版本'],price:['Price','售价'],originalUnit:['Original unit','原始单位'],expiration:['Expiration date','失效日'],componentCount:['Component count','组件数量'],componentReview:['Component review flag','组件核对标记'],priceActive:['Price Active (current)','价格Active（当前）']};
@@ -232,11 +243,15 @@ const BASE=['part','revision','customer','po','currency','unit','pcn','partKey',
 const TRACE=['pcn','partKey','poKey','lineKey'];
 export const SCHEMAS={poSelection:['part','revision','customer','po','poDate','type','releases','status','reason',...TRACE],priceChanges:['part','revision','customer','po','effective','oldPrice','newPrice','difference','currency','unit','note',...TRACE],overlaps:['part','revision','customer','po','start','end','distinctCount','prices','currency','unit',...TRACE],coverage:['part','revision','customer','po','status','rawRows','intervals','changeCount','overlapCount','currency','unit',...TRACE],issues:['part','revision','customer','po','code','priceKey','sourceRow','currency','unit',...TRACE],history:['part','revision','customer','po','price','priceActive','effective','expiration','currency','originalUnit','customerPart','customerRevision','priceKey','sourceRow','unit','componentCount','componentReview',...TRACE]};
 Object.assign(COLUMNS,{shipTo:['Ship-to','收货地址'],shipToKey:['Ship-to key','收货地址键'],asOf:['As-of date','基准日'],priceKeys:['Current price keys','当前价格键'],commonPrice:['Common effective price','共同有效售价'],branchCount:['Customer/Ship-to branches','客户／地址分支数'],poCount:['Selected PO lines/Ship-tos','选中PO明细／地址数'],gmMembers:['Branch / PO price details','分支／PO售价明细']});
+Object.assign(COLUMNS,{sourcePrice:['Original source Price','原始Price'],sourceRawPrice:['Original source Raw_Price','原始Raw_Price']});
+SCHEMAS.history.push('sourcePrice','sourceRawPrice');
 for(const name of Object.keys(SCHEMAS)){const at=SCHEMAS[name].indexOf('customer');if(at>=0)SCHEMAS[name].splice(at+1,0,'shipTo','shipToKey');}
 SCHEMAS.gmCurrent=['part','revision','customer','shipTo','po','asOf','price','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
 SCHEMAS.gmConsistency=['part','revision','asOf','commonPrice','currency','unit','status','reason','distinctCount','prices','difference','branchCount','poCount','gmMembers','pcn'];
 export function cell(row,field,lang='en',both=false){
  const v=row[field]??'';
+ if(v!==''&&['price','oldPrice','newPrice','commonPrice','difference'].includes(field)){try{return formatPrice(v);}catch{return v;}}
+ if(field==='prices'&&v){try{return String(v).split('; ').map(formatPrice).join('; ');}catch{return v;}}
  if(['status','reason','note','code'].includes(field)&&v){return String(v).split('|').map(c=>both?bilingual(c,row.details||''):message(c,row.details||'',lang)).join('; ');}
  return v;
 }
@@ -245,6 +260,7 @@ export function toCSV(report,name){
  const columns=SCHEMAS[name];const safe=v=>typeof v==='string'&&/^[=+@]/.test(v)?"'"+v:v;
  return '\uFEFF'+[columns.map(k=>quote(COLUMNS[k][0]+' / '+COLUMNS[k][1])).join(','),...report[name].map(r=>columns.map(k=>quote(safe(cell(r,k,'en',true)))).join(','))].join('\r\n')+'\r\n';
 }
+
 
 
 
