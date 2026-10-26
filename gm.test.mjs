@@ -50,4 +50,3 @@ test('report exports preserve Ship-to and bilingual GM explanations',()=>{const 
 test('write fictional GM browser fixtures only when requested',async()=>{if(!process.env.GM_FIXTURE_DIR)return;const rows=[...line('GM-PO-1','Flint'),...line('GM-PO-1','Oshawa'),...line('GM-PO-2','Flint'),...line('GM-PO-3','Canada','GM Canada SPO','12','7/1/2026','0')];const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';await fs.mkdir(process.env.GM_FIXTURE_DIR,{recursive:true});await fs.writeFile(process.env.GM_FIXTURE_DIR+'/gm-prices.csv',headers.join(',')+'\r\n'+rows.map(r=>headers.map(k=>quote(r[k])).join(',')).join('\r\n'));await fs.writeFile(process.env.GM_FIXTURE_DIR+'/gm-parts.csv','PartNo,Revision\r\nGM-DEMO,9\r\n');});
 
 
-

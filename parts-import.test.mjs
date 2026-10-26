@@ -22,4 +22,3 @@ test('CSV remains supported, including BOM and blank revision',()=>{const buffer
 test('unsupported extensions and empty sheets report a clear error',()=>{assert.throws(()=>openPartsFile(new Uint8Array(),'parts.pdf'),e=>e.code==='partsFormat');const x=openPartsFile(data(book([['PartNo','Revision']])),'parts.xlsx');assert.throws(()=>readPartsSheet(x.workbook,'Parts'),e=>e.code==='emptyParts');});
 test('create fictional browser fixtures when requested',async()=>{if(!process.env.PARTS_FIXTURE_DIR)return;const dir=process.env.PARTS_FIXTURE_DIR;await fs.mkdir(dir,{recursive:true});const wb=book([['PartNo','Revision'],['DEMO-A',''],['DEMO-B','']]);utils.book_append_sheet(wb,utils.aoa_to_sheet([['PartNo','Revision'],['DEMO-A','03']]),'Revision03');await fs.writeFile(dir+'/parts-test.xlsx',new Uint8Array(data(wb)));await fs.writeFile(dir+'/parts-test.xls',new Uint8Array(data(book([['PartNo','Revision'],['DEMO-A',''],['DEMO-B','']]),'biff8')));});
 
-

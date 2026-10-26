@@ -1,12 +1,19 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.3.0';
+export const VERSION = '4.4.0';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
+export const REPORTS=['currentPrices','priceChanges','overlaps','issues','history','gmCurrent','gmConsistency'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
 // Validated against the supplied Plex Spot Buy PO screenshots and their CSV keys.
 const isSpotBuy=r=>r.PCN==='269388'&&r.PO_Type_Key==='2501'&&['Other','Spot Buy'].includes(r.PO_Type);
 const GM_FIELDS=['Ship_To_Key','Ship_To_Code','Ship_To_Releases','Ship_To_Active'];
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ currentPrice:['One distinct Active price on the period end date','检查结束日有一个不同的 Active 有效售价'],
+ currentNoPrice:['No Active price on period end, although a price existed during the period','期间内曾有有效价，但检查结束日没有有效价'],
+ currentNoPeriodPrice:['No Active price in the review period; excluded','整期无 Active 有效价，已排除'],
+ currentManyPrices:['Several different Active prices on this PO at period end','该 PO 在检查结束日有多个不同的 Active 有效售价'],
+ currentInvalidPrice:['Current price cannot be determined from invalid status/date/amount data','状态、日期或金额无效，无法确定当前售价'],
+ currentBasis:['Current currency/unit basis is missing or inconsistent','当前币种或单位缺失或不一致'],
  spotBuyExcluded:['Spot Buy excluded from price comparison','Spot Buy 已排除，不参与售价比较'],
  gmMetadata:['GM Ship-to fields are missing; re-export with the updated SQL','缺少 GM Ship-to 信息，请用新版 SQL 重新导出'],
  gmAddress:['Missing or inactive approved GM Ship-to; confirmation required','GM 批准收货地址缺失或非 Active，需要确认'],
@@ -120,12 +127,7 @@ export function overlapping(records,start,end){
  for(let i=0;i<days.length-1;i++){const day=days[i];for(const [p,n]of events.get(day)||[])active.set(p,(active.get(p)||0)+n);const prices=sortedPrices([...active].filter(([,n])=>n>0).map(([p])=>p));if(prices.length<2)continue;const last=out.at(-1);if(last&&last.end+1===day&&key(last.prices)===key(prices))last.end=days[i+1]-1;else out.push({start:day,end:days[i+1]-1,prices});}
  return out;
 }
-function buildGMReports(report,matched,selected,periodStart,asOf,issue){
- const gmRows=matched.filter(r=>isGM(r)&&!isSpotBuy(r)),selectedByBranch=groupBy(selected.filter(isGM),selectionKey);
- for(const [branch,source]of groupBy(gmRows,selectionKey)){
-  const chosen=selectedByBranch.get(branch)||[];
-  if(!chosen.length){report.gmCurrent.push({...context(source[0]),po:'',poKey:'',lineKey:'',asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:'gmUnselected'});continue;}
-  for(const rr of groupBy(chosen,poBranchKey).values()){
+function resolveCurrentPrice(rr,periodStart,asOf,issue){
    const first=rr[0],row={...context(first),asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:''};
    try{
     const effective=[];let activeDuringPeriod=false;
@@ -138,15 +140,23 @@ function buildGMReports(report,matched,selected,periodStart,asOf,issue){
      if(a>asOf||(b!==null&&b<asOf))continue;
      if(!r.currency_code||!['pcs','Ea'].includes(r.unit))fail('gmBasis');
      const price=price4(r.Price);if(compare(price,price4(r.Raw_Price))!==0)fail('gmInvalidPrice');
-     effective.push({price,currency:r.currency_code,unit:canonicalUnit(r.unit),priceKey:r.price_key});
+     effective.push({price,currency:r.currency_code,unit:canonicalUnit(r.unit),priceKey:r.price_key,effective:iso(a),expiration:b===null?'':iso(b)});
     }
     if(!effective.length){if(activeDuringPeriod)fail('gmNoPrice','An Active price existed during the period / 期间内曾有有效价');else fail('gmNoPeriodPrice',iso(periodStart)+' — '+iso(asOf));}
     if(new Set(effective.map(r=>key(r.currency,r.unit))).size!==1)fail('gmBasis');
     const amounts=sortedPrices(new Set(effective.map(r=>r.price)));
     if(amounts.length!==1)fail('gmManyPrices',amounts.map(formatPrice).join('; '));
-    Object.assign(row,{price:amounts[0],currency:effective[0].currency,unit:effective[0].unit,priceKeys:[...new Set(effective.map(r=>r.priceKey))].join('; '),status:'complete',reason:'gmCurrent'});
+    Object.assign(row,{price:amounts[0],currency:effective[0].currency,unit:effective[0].unit,effective:[...new Set(effective.map(r=>r.effective))].sort().join('; '),priceKeys:[...new Set(effective.map(r=>r.priceKey))].join('; '),status:'complete',reason:'gmCurrent'});
    }catch(e){const info=errorInfo(e);row.reason=['gmNoPrice','gmNoPeriodPrice','gmManyPrices','gmBasis'].includes(info.code)?info.code:'gmInvalidPrice';row.details=info.code==='gmNoPeriodPrice'?info.details:iso(asOf)+(info.details?' · '+info.details:'');if(info.code==='gmNoPeriodPrice')row.status='excluded';else issue(first,row.reason,row.details);}
-   report.gmCurrent.push(row);
+   return row;
+}
+function buildGMReports(report,matched,selected,periodStart,asOf,issue){
+ const gmRows=matched.filter(r=>isGM(r)&&!isSpotBuy(r)),selectedByBranch=groupBy(selected.filter(isGM),selectionKey);
+ for(const [branch,source]of groupBy(gmRows,selectionKey)){
+  const chosen=selectedByBranch.get(branch)||[];
+  if(!chosen.length){report.gmCurrent.push({...context(source[0]),po:'',poKey:'',lineKey:'',asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:'gmUnselected'});continue;}
+  for(const rr of groupBy(chosen,poBranchKey).values()){
+   report.gmCurrent.push(resolveCurrentPrice(rr,periodStart,asOf,issue));
   }
  }
  for(const rr of groupBy(report.gmCurrent,r=>key(r.pcn,r.part,r.revision)).values()){
@@ -162,6 +172,17 @@ function buildGMReports(report,matched,selected,periodStart,asOf,issue){
   }
  }
 }
+function buildCurrentPrices(report,selected,periodStart,asOf){
+ const codes={gmCurrent:'currentPrice',gmNoPrice:'currentNoPrice',gmNoPeriodPrice:'currentNoPeriodPrice',gmManyPrices:'currentManyPrices',gmInvalidPrice:'currentInvalidPrice',gmBasis:'currentBasis'};
+ report.currentPrices.push(...report.gmCurrent.filter(r=>r.po&&r.status!=='excluded').map(r=>({...r,reason:codes[r.reason]||r.reason})));
+ const pending=[];
+ for(const rr of groupBy(selected.filter(r=>!isGM(r)),poBranchKey).values()){
+  const row=resolveCurrentPrice(rr,periodStart,asOf,(source,code,details)=>pending.push({source,code:codes[code]||'currentInvalidPrice',details}));
+  row.reason=codes[row.reason]||'currentInvalidPrice';
+  if(row.status!=='excluded')report.currentPrices.push(row);
+ }
+ return pending;
+}
 export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  const missing=REQUIRED.filter(x=>!headers.includes(x));if(missing.length)fail('missingHeaders',missing.join(', '));
  let start,end;try{start=parseDate(startText);end=parseDate(endText);}catch{fail('invalidPeriod');}
@@ -170,7 +191,7 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  scope=[...new Map(scope.map(s=>[key(s.PartNo.trim(),normalizeRevision(s.Revision)),{PartNo:s.PartNo.trim(),Revision:normalizeRevision(s.Revision)}])).values()];
  const scopeSet=new Set(scope.map(s=>key(s.PartNo,s.Revision)));
  const matched=rows.filter(r=>scopeSet.has(key(r.Minth_Part_No,normalizeRevision(r.revision))));
- const report={poSelection:[],priceChanges:[],overlaps:[],coverage:[],issues:[],history:[],gmCurrent:[],gmConsistency:[]};
+ const report={poSelection:[],priceChanges:[],overlaps:[],coverage:[],issues:[],history:[],gmCurrent:[],gmConsistency:[],currentPrices:[]};
  const issue=(r,code,details='')=>report.issues.push({...context(r),priceKey:r.price_key||'',sourceRow:r._line||'',code,details});
  for(const s of scope)if(!matched.some(r=>r.Minth_Part_No===s.PartNo&&normalizeRevision(r.revision)===s.Revision))issue({Minth_Part_No:s.PartNo,revision:s.Revision},'missingScope');
  const blocked=new Set();
@@ -248,7 +269,13 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   report.coverage.push(coverage);
  }
  buildGMReports(report,matched,selected,start,end,issue);
- report.summary={version:VERSION,priceDecimals:4,priceRounding:'half_up',source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length,gmAsOf:iso(end),gmGroups:report.gmConsistency.length};
+ const currentPending=buildCurrentPrices(report,selected,start,end);
+ for(const {source,code,details} of currentPending){
+  const ctx=context(source),equivalent=code==='currentInvalidPrice'?['invalidActive','missingDate','reverseDate','badDate','invalidNumber','priceMismatch']:code==='currentBasis'?['unknownUnit','missingIdentity']:[];
+  const alreadyReported=report.issues.some(r=>['pcn','partKey','customer','poKey','lineKey'].every(k=>r[k]===ctx[k])&&(r.code===code||equivalent.includes(r.code)));
+  if(!alreadyReported)issue(source,code,details);
+ }
+ report.summary={version:VERSION,priceDecimals:4,priceRounding:'half_up',source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length,gmAsOf:iso(end),gmGroups:report.gmConsistency.length,currentPOs:report.currentPrices.length};
  return report;
 }
 export const COLUMNS={part:['Part No.','零件号'],revision:['Revision','版本'],pcn:['PCN','PCN'],partKey:['Part key','零件键'],customer:['Customer','客户'],po:['PO','PO'],poKey:['PO key','PO键'],lineKey:['PO line key','PO明细键'],currency:['Currency','币种'],unit:['Comparison unit','比较单位'],poDate:['PO date','PO日期'],type:['PO type','PO类型'],releases:['Releases','Releases数量'],status:['Status','状态'],reason:['Reason','原因'],effective:['Effective date','生效日'],oldPrice:['Previous price','前序价格'],newPrice:['New price','新价格'],difference:['Difference','差额'],note:['Note','说明'],start:['Start date','开始日期'],end:['End date','结束日期'],distinctCount:['Distinct prices','不同售价数量'],prices:['Prices','售价列表'],rawRows:['Source price rows','原始价格行数'],intervals:['Analysis intervals','分析区间数'],changeCount:['Changes','调价事件数'],overlapCount:['Overlap intervals','重叠区间数'],priceKey:['Price key','价格键'],sourceRow:['CSV row','CSV行号'],code:['Issue','问题'],customerPart:['Customer part No.','客户零件号'],customerRevision:['Customer revision','客户版本'],price:['Price','售价'],originalUnit:['Original unit','原始单位'],expiration:['Expiration date','失效日'],componentCount:['Component count','组件数量'],componentReview:['Component review flag','组件核对标记'],priceActive:['Price Active (current)','价格Active（当前）']};
@@ -262,6 +289,7 @@ SCHEMAS.coverage.splice(SCHEMAS.coverage.indexOf('status')+1,0,'reason');
 for(const name of Object.keys(SCHEMAS)){const at=SCHEMAS[name].indexOf('customer');if(at>=0)SCHEMAS[name].splice(at+1,0,'shipTo','shipToKey');}
 SCHEMAS.gmCurrent=['part','revision','customer','shipTo','po','asOf','price','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
 SCHEMAS.gmConsistency=['part','revision','asOf','commonPrice','currency','unit','status','reason','distinctCount','prices','difference','branchCount','poCount','gmMembers','pcn'];
+SCHEMAS.currentPrices=['part','revision','customer','shipTo','po','asOf','price','effective','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
 export function cell(row,field,lang='en',both=false){
  const v=row[field]??'';
  if(v!==''&&['price','oldPrice','newPrice','commonPrice','difference'].includes(field)){try{return formatPrice(v);}catch{return v;}}
@@ -274,6 +302,7 @@ export function toCSV(report,name){
  const columns=SCHEMAS[name];const safe=v=>typeof v==='string'&&/^[=+@]/.test(v)?"'"+v:v;
  return '\uFEFF'+[columns.map(k=>quote(COLUMNS[k][0]+' / '+COLUMNS[k][1])).join(','),...report[name].map(r=>columns.map(k=>quote(safe(cell(r,k,'en',true)))).join(','))].join('\r\n')+'\r\n';
 }
+
 
 
 

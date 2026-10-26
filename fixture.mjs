@@ -8,4 +8,3 @@ export function fixture(){
 }
 export const scope=[{PartNo:'DEMO-A',Revision:''},{PartNo:'DEMO-B',Revision:''}];
 
-

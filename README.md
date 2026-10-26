@@ -21,7 +21,9 @@ flowchart LR
 1. Run [Plex_export.sql](Plex_export.sql) in Plex and export CSV. / 在 Plex 执行 SQL，导出客户价格底表 CSV。
 2. Import the price CSV and an Excel (.xlsx/.xls) or CSV part list with part and revision headers (e.g. `PartNo,Rev`). Choose a worksheet if prompted. / 导入价格底表 CSV，以及含零件号、版本表头（如 `PartNo,Rev`）的 Excel（.xlsx/.xls）或 CSV 零件清单；多工作表时请选择需要的表。
 3. Set start/end dates and run. Empty Revision means the blank version only; one-digit numeric revisions match padded versions (9 = 09). / 设置起止日期并运行；版本留空仅匹配系统空白版本；一位数字版本补零匹配（9 = 09）。
-4. Review PO selection and pending items, then download bilingual reports. / 核对 PO 筛选与待确认事项，下载双语报告。
+4. Review current PO prices and pending items, then download bilingual reports. / 核对当前 PO 价格与待确认事项，下载双语报告。
+
+Current PO prices use the selected period end date and show qualified POs across all customers. / 当前 PO 价格以所选检查期间的结束日为准，显示所有客户符合条件的 PO 售价。
 
 Overlap checks require `Price_Active` from the updated SQL. Only currently active prices participate; inactive records remain in history and price-change comparisons. / 重叠检查需要新版 SQL 的 `Price_Active` 列；仅纳入当前有效价格，inactive 记录仍保留在历史和调价比较中。
 
@@ -37,15 +39,17 @@ Spot Buy POs and Spot Buy-only branches are excluded from comparison, not treate
 
 For GM current-price consistency, exclude selected PO/Ship-to rows with no Active effective price anywhere in the review period. A price valid earlier in the period but expired by period end remains pending. History/change audit is retained. If every row is excluded, show excluded with no common price. / GM 当前价比对中，整期无 Active 有效价的 PO／地址明细排除；期间曾有价但结束日无价仍待确认。保留历史及调价检查；全部排除时不确认共同售价。
 
+Different Active prices effective on the same PO at period end require confirmation; no price is chosen automatically. The overlap report is retained. / 同一 PO 在结束日存在多个不同 Active 有效价时列入待确认，不自动选价；保留重叠报告。
+
 ## Reports / 输出
 
-PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history · GM current prices · GM price consistency
+Current PO prices · Price changes · Overlapping prices · Items requiring confirmation · Price history · GM current prices · GM price consistency
 
-PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 价格明细 · GM 当前价格 · GM 价格一致性
+当前 PO 价格 · 售价变动 · 多个有效售价 · 待确认 · 价格明细 · GM 当前价格 · GM 价格一致性
 
 ## Local development / 本机开发
 
-`python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs gm.test.mjs precision.test.mjs`
+`python -m http.server 8766 --bind 127.0.0.1` · `node --test *.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
 

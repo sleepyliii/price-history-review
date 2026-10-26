@@ -1,1 +1,1 @@
-{"name":"price-history-review","private":true,"type":"module","scripts":{"test":"node --test engine.test.mjs parts-import.test.mjs gm.test.mjs precision.test.mjs"}}
+{"name": "price-history-review", "private": true, "type": "module", "scripts": {"test": "node --test *.test.mjs"}}
