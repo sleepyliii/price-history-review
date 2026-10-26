@@ -1,5 +1,5 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.5.0';
+export const VERSION = '4.6.0';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
 export const REPORTS=['currentPrices','priceChanges','overlaps','issues','history','gmCurrent','gmConsistency'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
@@ -175,7 +175,14 @@ function buildGMReports(report,matched,selected,periodStart,asOf,issue){
 }
 function buildCurrentPrices(report,selected,periodStart,asOf){
  const codes={gmCurrent:'currentPrice',gmNoPrice:'currentNoPrice',gmNoPeriodPrice:'currentNoPeriodPrice',gmManyPrices:'currentManyPrices',gmInvalidPrice:'currentInvalidPrice',gmBasis:'currentBasis'};
- report.currentPrices.push(...report.gmCurrent.filter(r=>r.po&&r.status!=='excluded').map(r=>({...r,reason:codes[r.reason]||r.reason})));
+ for(const rr of groupBy(report.gmCurrent.filter(r=>r.po&&r.status!=='excluded'),r=>key(r.pcn,r.partKey,r.part,r.revision,r.customer)).values()){
+  const samePrice=rr.every(r=>r.status==='complete')&&new Set(rr.map(r=>key(r.price,r.currency,r.unit))).size===1;
+  for(const group of groupBy(rr,r=>r.status==='complete'?key(r.price,r.currency,r.unit):key('unresolved',r.lineKey,r.shipToKey,r.reason)).values()){
+   const unique=field=>[...new Set(group.flatMap(r=>String(r[field]||'').split('; ').filter(Boolean)))].join('; ');
+   const row={...group[0],shipTo:samePrice?'':unique('shipTo'),shipToKey:unique('shipToKey'),sourceShipTos:unique('shipTo'),po:unique('po'),poKey:unique('poKey'),lineKey:unique('lineKey'),effective:unique('effective'),priceKeys:unique('priceKeys'),reason:codes[group[0].reason]||group[0].reason};
+   report.currentPrices.push(row);
+  }
+ }
  const pending=[];
  for(const rr of groupBy(selected.filter(r=>!isGM(r)),poBranchKey).values()){
   const row=resolveCurrentPrice(rr,periodStart,asOf,(source,code,details)=>pending.push({source,code:codes[code]||'currentInvalidPrice',details}));
@@ -295,6 +302,7 @@ for(const name of Object.keys(SCHEMAS)){const at=SCHEMAS[name].indexOf('customer
 SCHEMAS.gmCurrent=['part','revision','customer','shipTo','po','asOf','price','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
 SCHEMAS.gmConsistency=['part','revision','asOf','commonPrice','currency','unit','status','reason','distinctCount','prices','difference','branchCount','poCount','gmMembers','pcn'];
 SCHEMAS.currentPrices=['part','revision','customer','shipTo','po','asOf','price','effective','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
+ COLUMNS.sourceShipTos=['Source Ship-tos','来源收货地址'];SCHEMAS.currentPrices.push('sourceShipTos');
 export function cell(row,field,lang='en',both=false){
  const v=row[field]??'';
  if(v!==''&&['price','oldPrice','newPrice','commonPrice','difference'].includes(field)){try{return formatPrice(v);}catch{return v;}}

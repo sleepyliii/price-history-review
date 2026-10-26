@@ -1,9 +1,9 @@
-import {REQUIRED,SCHEMAS,REPORTS,COLUMNS,message,cell,parseCSV} from './engine.js?v=4.5';
+import {REQUIRED,SCHEMAS,REPORTS,COLUMNS,message,cell,parseCSV} from './engine.js?v=4.6';
 const $=id=>document.getElementById(id);
 const labels={
  exportFailed:['Excel export failed. Please try again.','Excel 导出失败，请重试。'],
- currentPOs:['Current PO / Ship-to rows','当前 PO／地址明细'],
- currentPrices:['Current PO prices','当前 PO 价格'],notesCurrentPrices:['Qualified POs across all customers; Active prices effective on the period end date, rounded to four decimals. Spot Buy and whole-period no-price rows are excluded.','所有客户符合条件的 PO 在检查结束日的 Active 有效售价，保留四位小数；排除 Spot Buy 及整期无有效价记录。'],
+ currentPOs:['Current price rows','当前价格条目'],
+ currentPrices:['Current PO prices','当前 PO 价格'],notesCurrentPrices:['Qualified POs across all customers; Active prices effective on the period end date, rounded to four decimals. Spot Buy and whole-period no-price rows are excluded. Equal GM results are consolidated per customer.','所有客户符合条件的 PO 在检查结束日的 Active 有效售价，保留四位小数；排除 Spot Buy 及整期无有效价记录；GM 同价结果按客户合并。'],
  gmCurrent:['GM current prices','GM 当前价格'],gmConsistency:['GM price consistency','GM 价格一致性'],notesGMCurrent:['Selected GM Blanket PO / Ship-to prices effective on the period end date; Spot Buy-only branches are excluded. POs with no Active price anywhere in the period are excluded; earlier-period-only prices remain pending.','排除只有 Spot Buy 的分支；按检查结束日核对各 GM Blanket PO／Ship-to 的 Active 有效售价，整期无有效价的 PO 排除；期间曾有价但结束日无价仍待确认。'],notesGMConsistency:['A common price is confirmed only when all compared GM branches/POs resolve to the same amount and currency/unit basis.','仅当所有参与比较的 GM 分支／PO 的价格、币种及单位均已确定且一致时，确认共同售价。'],
  showAll:['Show all','展开全部'],collapseScope:['Collapse','收起'],
  worksheet:['Worksheet','工作表'],selectSheet:['Select a worksheet','请选择工作表'],partsLoading:['Reading part list…','正在读取零件清单…'],partsFormat:['Supported part lists: .xlsx, .xls and .csv.','零件清单支持 .xlsx、.xls 和 .csv。'],partsReadError:['Could not read this list. Check that the file is valid and not password-protected. The current list was not changed.','无法读取清单，请检查文件是否有效、是否受密码保护。原清单未更改。'],emptyParts:['The selected sheet contains no part rows. The current list was not changed.','所选工作表没有零件记录，原清单未更改。'],
@@ -33,7 +33,7 @@ function run(){
  clearReport();if(partsPending){setError({label:'selectSheet'});return;}if(!source){setError({label:'chooseFile'});return;}const list=scope();if(!list.length){setError({code:'invalidScope'});return;}
  lock(true);progress('reading');
  source.arrayBuffer().then(buffer=>{
-  worker?.terminate();worker=new Worker(new URL('./worker.js?v=4.5',import.meta.url),{type:'module'});
+  worker?.terminate();worker=new Worker(new URL('./worker.js?v=4.6',import.meta.url),{type:'module'});
   worker.onmessage=({data})=>{if(data.stage)progress(data.stage);if(data.error){setError(data.error);progressKey='';$('progress').hidden=true;lock(false);worker.terminate();}if(data.report){report=data.report;active=report.issues.length?'issues':'currentPrices';page=0;lock(false);progress('done');renderResults();worker.terminate();}};
   worker.onerror=()=>{setError({label:'workerFailed'});lock(false);$('progress').hidden=true;worker.terminate();};
   worker.postMessage({buffer,scope:list,start:$('start').value,end:$('end').value,source:source.name},[buffer]);
@@ -49,16 +49,16 @@ function renderResults(){
 }
 function renderTabsOnly(){for(const [index,name]of REPORTS.entries()){const button=$('tabs').children[index];button.classList.toggle('active',active===name);button.setAttribute('aria-current',active===name?'page':'false');}}
 function renderTable(){
- $('table-title').textContent=t(active);$('table-note').textContent=t(tableNotes[active]);const cols=SCHEMAS[active].filter(k=>!['pcn','partKey','poKey','lineKey','shipToKey','sourcePrice','sourceRawPrice','gmMembers'].includes(k)&&(k!=='shipTo'||active==='gmCurrent'||report[active].some(r=>r.shipToKey||r.shipTo)));const head=document.createElement('tr');for(const c of cols)head.append(element('th',COLUMNS[c][lang==='zh'?1:0]));$('result-head').replaceChildren(head);$('result-body').replaceChildren();const rows=report[active],size=50,part=rows.slice(page*size,(page+1)*size);
+ $('table-title').textContent=t(active);$('table-note').textContent=t(tableNotes[active]);const cols=SCHEMAS[active].filter(k=>!['pcn','partKey','poKey','lineKey','shipToKey','sourcePrice','sourceRawPrice','gmMembers','sourceShipTos'].includes(k)&&(k!=='shipTo'||active==='gmCurrent'||report[active].some(r=>active==='currentPrices'?r.shipTo:(r.shipToKey||r.shipTo))));const head=document.createElement('tr');for(const c of cols)head.append(element('th',COLUMNS[c][lang==='zh'?1:0]));$('result-head').replaceChildren(head);$('result-body').replaceChildren();const rows=report[active],size=50,part=rows.slice(page*size,(page+1)*size);
  if(!part.length){const td=element('td',t('none'));td.colSpan=cols.length;const tr=document.createElement('tr');tr.append(td);$('result-body').append(tr);}
- for(const r of part){const tr=document.createElement('tr');for(const c of cols){const td=document.createElement('td');const value=cell(r,c,lang);if(c==='status')td.append(element('span',value,'badge '+r.status));else td.textContent=value;tr.append(td);}$('result-body').append(tr);}
+ for(const r of part){const tr=document.createElement('tr');for(const c of cols){const td=document.createElement('td');const value=cell(r,c,lang);if(c==='status')td.append(element('span',value,'badge '+r.status));else if(active==='currentPrices'&&['po','priceKeys','effective','shipTo'].includes(c)&&String(value).split('; ').length>3){const entries=String(value).split('; ');td.textContent=entries.slice(0,2).join('; ')+' … (+'+(entries.length-2)+')';td.title=String(value);}else td.textContent=value;tr.append(td);}$('result-body').append(tr);}
  const total=Math.max(1,Math.ceil(rows.length/size));$('pagination').replaceChildren(element('span',rows.length+' '+t('records')),element('span',t('page')+' '+(page+1)+' '+t('of')+' '+total));for(const [label,offset]of [['previous',-1],['next',1]]){const b=element('button',t(label));b.disabled=page+offset<0||page+offset>=total;b.onclick=()=>{page+=offset;renderTable();};$('pagination').append(b);}
 }
 function download(blob,name){const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function downloadExcel(all){
  if(!report)return;const snapshot=report,names=all?REPORTS:[active];
  $('download-one').disabled=true;$('download-all').disabled=true;
- try{const {exportExcel}=await import('./excel-export.js?v=4.5');const bytes=exportExcel(snapshot,names);const name=all?'price_review_'+snapshot.summary.start+'_'+snapshot.summary.end:names[0]+'_'+snapshot.summary.end;download(new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name+'.xlsx');}
+ try{const {exportExcel}=await import('./excel-export.js?v=4.6');const bytes=exportExcel(snapshot,names);const name=all?'price_review_'+snapshot.summary.start+'_'+snapshot.summary.end:names[0]+'_'+snapshot.summary.end;download(new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name+'.xlsx');}
  catch{setError({label:'exportFailed'});}
  finally{$('download-one').disabled=false;$('download-all').disabled=!report;}
 }

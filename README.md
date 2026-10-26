@@ -31,7 +31,7 @@ Select POs separately for each part / revision / customer. Blanket POs with posi
 
 When the latest earlier effective date has multiple old prices, prefer the price expiring the day before the new price. Multiple different qualifying prices still require confirmation. / 前序最近生效日有多个旧价时，优先采用新价前一天失效的旧价；仍有多个不同价格符合时需确认。
 
-GM group: GMNA, GM-NA 1, GMCCA, GM Canada SPO, GM Henniges, GM Henniges SPO. Re-export with the updated SQL to include approved Ship-to keys, codes, status and Releases. GM selects the latest batch per customer/Ship-to and retains same-day POs. All branches must have the same valid price, currency and unit on the period end date to confirm a common price; unresolved branches stay pending. / GM 按客户＋Ship-to 选最新批次并保留同日 PO；需用新版 SQL 重新导出地址、状态和地址级 Releases。以检查结束日比价，价格、币种和单位一致且无未确定分支才确认共同售价。
+GM group: GMNA, GM-NA 1, GMCCA, GM Canada SPO, GM Henniges, GM Henniges SPO. Select the latest Blanket batch separately per customer/Ship-to, prioritizing positive Ship-to Releases and retaining same-day POs. Different prices between addresses, including within the same customer, require confirmation. The current-price page combines matching prices within each customer; different prices and unresolved rows stay separate. Original PO/Ship-to details remain available for traceability. / GM 按客户＋Ship-to 分别筛选最新 Blanket 批次，优先地址级 Releases > 0，保留同日多个 PO。同一客户不同地址的售价不同，仍需确认。当前价格页仅按客户合并同价结果；不同价格或未确定记录分别显示，保留原始 PO／地址追溯。
 
 All customer/PO prices are rounded half-up to four decimal places before changes, overlaps and GM consistency checks. Original amounts remain in the history export. / 所有客户及 PO 的售价均先四舍五入至四位，再检查调价、重叠及 GM 一致性；历史导出保留原始金额。
 

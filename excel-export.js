@@ -1,5 +1,5 @@
 import {utils,write} from './xlsx.mjs';
-import {REPORTS,SCHEMAS,COLUMNS,cell,price4} from './engine.js?v=4.5';
+import {REPORTS,SCHEMAS,COLUMNS,cell,price4} from './engine.js?v=4.6';
 
 export const SHEET_NAMES={currentPrices:'Current PO 当前价',priceChanges:'Price changes 售价变动',overlaps:'Overlaps 多个有效价',issues:'Needs confirmation 待确认',history:'Price history 价格明细',gmCurrent:'GM current 当前价',gmConsistency:'GM consistency 同价检查'};
 const PRICE_FIELDS=new Set(['price','oldPrice','newPrice','commonPrice','difference']);
