@@ -17,14 +17,15 @@ DECLARE @PartStatusFilter VARCHAR(1000) = '';
 
 SET @PartStatusFilter = ',' + @PartStatusFilter + ',';
 
-/* 第一步：每一条PO明细只生成一条Release汇总。
-   保留原customer releases query的有效状态过滤，并跨Ship-to汇总。
+/* 第一步：先按PO明细和Ship-to汇总，再生成原有的PO明细总量。
+   GM分支使用Ship-to数量；其他客户保持原有PO明细汇总规则。
    此金额/数量是当前状态，不是指定历史期间的快照。
 */
 SELECT
     R.po_line_key,
+    R.ship_to,
     SUM(R.quantity) AS Releases
-INTO #ReleaseByPOLine
+INTO #ReleaseByPOLineShipTo
 FROM sales_v_release AS R
 JOIN sales_v_po_line AS POL
     ON POL.po_line_key = R.po_line_key
@@ -46,7 +47,29 @@ WHERE CS.active = 1
   AND CA.active = 1
   AND POS.active = 1
   AND RS1.active = 1
-GROUP BY R.po_line_key;
+GROUP BY R.po_line_key, R.ship_to;
+
+SELECT po_line_key, SUM(Releases) AS Releases
+INTO #ReleaseByPOLine
+FROM #ReleaseByPOLineShipTo
+GROUP BY po_line_key;
+
+/* GM approved Ship-to mappings. Each price is intentionally repeated once per
+   distinct approved Ship-to; non-GM rows retain their original granularity.
+   地址状态保留供工具核对；缺失/非Active地址不会被假定为正常。
+*/
+SELECT DISTINCT
+    PST.po_line_key,
+    PST.ship_to AS Ship_To_Key,
+    CA.customer_address_code AS Ship_To_Code,
+    CASE WHEN CA.active = 1 THEN 1 WHEN CA.active = 0 THEN 0 ELSE NULL END AS Ship_To_Active
+INTO #GMShipTo
+FROM sales_v_po_ship_to AS PST
+JOIN sales_v_po_line AS POL ON POL.po_line_key = PST.po_line_key
+JOIN sales_v_po AS PO ON PO.po_key = POL.po_key
+JOIN common_v_customer AS C ON C.customer_no = PO.customer_no
+LEFT JOIN common_v_customer_address AS CA ON CA.customer_address_no = PST.ship_to
+WHERE C.customer_code IN ('GMNA', 'GM-NA 1', 'GMCCA', 'GM Canada SPO', 'GM Henniges', 'GM Henniges SPO');
 
 /* 第二步：计算每条价格关联的非Shipment Price组件行数。
    同样每个price_key只生成一条记录，不使主查询扩行。
@@ -95,7 +118,11 @@ SELECT
     CU.currency_code,
     PR.effective_date,
     PR.expiration_date,
-    COALESCE(RL.Releases, 0) AS Releases
+    COALESCE(RL.Releases, 0) AS Releases,
+    GST.Ship_To_Key,
+    GST.Ship_To_Code,
+    GST.Ship_To_Active,
+    CASE WHEN GST.Ship_To_Key IS NOT NULL THEN COALESCE(SRL.Releases, 0) ELSE NULL END AS Ship_To_Releases
 FROM sales_v_po_line AS POL
 JOIN part_v_part AS P
     ON P.part_key = POL.part_key
@@ -115,6 +142,10 @@ LEFT JOIN #ReleaseByPOLine AS RL
     ON RL.po_line_key = POL.po_line_key
 LEFT JOIN #PriceComponentCounts AS PCC
     ON PCC.price_key = PR.price_key
+LEFT JOIN #GMShipTo AS GST
+    ON GST.po_line_key = POL.po_line_key
+LEFT JOIN #ReleaseByPOLineShipTo AS SRL
+    ON SRL.po_line_key = POL.po_line_key AND SRL.ship_to = GST.Ship_To_Key
 WHERE CP.active = 1
   AND POS.active = 1
   AND POL.active = 1
@@ -126,8 +157,10 @@ WHERE CP.active = 1
         @PartStatusFilter = ',,'
         OR CHARINDEX(',' + CAST(P.part_status AS VARCHAR(40)) + ',', @PartStatusFilter) > 0
       )
-ORDER BY P.part_no, C.customer_code, PO.po_no, POL.po_line_key, PR.effective_date, PR.price_key;
+ORDER BY P.part_no, C.customer_code, PO.po_no, POL.po_line_key, GST.Ship_To_Key, PR.effective_date, PR.price_key;
 
 DROP TABLE #PriceComponentCounts;
 DROP TABLE #ReleaseByPOLine;
+DROP TABLE #ReleaseByPOLineShipTo;
+DROP TABLE #GMShipTo;
 

@@ -1,7 +1,23 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '3.8.0';
+export const VERSION = '4.0.0';
+export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
+const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
+const GM_FIELDS=['Ship_To_Key','Ship_To_Code','Ship_To_Releases','Ship_To_Active'];
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ gmMetadata:['GM Ship-to fields are missing; re-export with the updated SQL','缺少 GM Ship-to 信息，请用新版 SQL 重新导出'],
+ gmAddress:['Missing or inactive approved GM Ship-to; confirmation required','GM 批准收货地址缺失或非 Active，需要确认'],
+ gmBatch:['Latest GM Blanket batch with positive Ship-to Releases; same-day POs retained','最新 GM Blanket 批次，Ship-to Releases > 0；保留同日多个 PO'],
+ gmZeroBatch:['Ship-to Blanket Releases are all zero; latest GM batch retained','该 Ship-to 的 Blanket Releases 全为零，保留最新 GM 批次'],
+ gmCurrent:['One distinct Active price on the period end date','检查结束日有一个不同的 Active 有效售价'],
+ gmNoPrice:['No Active price effective on the period end date','检查结束日没有 Active 且在有效期内的售价'],
+ gmManyPrices:['Several different Active prices on this PO at period end','该 PO 在检查结束日有多个不同的 Active 有效售价'],
+ gmInvalidPrice:['Current GM price cannot be determined from invalid price/status/date data','价格、状态或日期无效，无法确定 GM 当前售价'],
+ gmUnselected:['This GM branch has no selected PO; group consistency is incomplete','该 GM 分支未选出 PO，组内一致性检查未完成'],
+ gmEqual:['All selected GM branches/POs have the same effective price at period end','所选 GM 分支及 PO 在检查结束日的有效售价相同'],
+ gmMismatch:['Selected GM branches/POs have different effective prices','所选 GM 分支或 PO 的有效售价不同'],
+ gmIncomplete:['Some GM branches/POs are unresolved; no common price is confirmed','部分 GM 分支或 PO 未确定，不确认共同售价'],
+ gmBasis:['GM currency/unit bases differ; no conversion or common price assumed','GM 币种或单位不同，不换算、不确认共同售价'],
  comparisonExpiration:['Several previous prices shared the latest earlier effective date; selected the price expiring the day before the new price','前序最近生效日有多个售价，采用新价生效前一天失效的旧价'],
  invalidActive:['Price Active is missing or invalid; overlap checking is paused for this group. Re-export using the updated SQL','价格 Active 缺失或无效，暂停该组重叠检查；请用新版 SQL 重新导出'],
  selected:['Selected','选中'],excluded:['Excluded','排除'],review:['Needs confirmation','待确认'],paused:['Paused','暂停'],complete:['Completed','已完成'],partial:['Partial results; confirmation required','部分结果待确认'],
@@ -74,7 +90,9 @@ const key=(...x)=>JSON.stringify(x);
 const groupBy=(rows,fn)=>{const map=new Map();for(const r of rows){const k=fn(r);if(!map.has(k))map.set(k,[]);map.get(k).push(r);}return map;};
 const canonicalUnit=u=>u==='pcs'||u==='Ea'?'Ea':u;
 export function normalizeRevision(value){const revision=String(value??'').trim();return /^\d$/.test(revision)?'0'+revision:revision;}
-function context(r){return {part:r.Minth_Part_No||'',revision:normalizeRevision(r.revision),pcn:r.PCN||'',partKey:r.part_key||'',customer:r.customer_code||'',po:r.po_no||'',poKey:r.po_key||'',lineKey:r.po_line_key||'',currency:r.currency_code||'',unit:canonicalUnit(r.unit||'')};}
+function context(r){return {part:r.Minth_Part_No||'',revision:normalizeRevision(r.revision),pcn:r.PCN||'',partKey:r.part_key||'',customer:r.customer_code||'',po:r.po_no||'',poKey:r.po_key||'',lineKey:r.po_line_key||'',currency:r.currency_code||'',unit:canonicalUnit(r.unit||''),shipToKey:isGM(r)?r.Ship_To_Key||'':'',shipTo:isGM(r)?r.Ship_To_Code||'':''};}
+const selectionKey=r=>key(r.PCN,r.part_key,r.customer_code,isGM(r)?r.Ship_To_Key||'':'');
+const poBranchKey=r=>key(selectionKey(r),r.po_line_key);
 const groupKey=r=>key(...Object.values(context(r)));
 const sortedPrices=x=>[...x].sort(compare);
 function errorInfo(e){try{return JSON.parse(e.message);}catch{return {code:'invalidNumber',details:String(e.message)};}}
@@ -86,6 +104,47 @@ export function overlapping(records,start,end){
  for(let i=0;i<days.length-1;i++){const day=days[i];for(const [p,n]of events.get(day)||[])active.set(p,(active.get(p)||0)+n);const prices=sortedPrices([...active].filter(([,n])=>n>0).map(([p])=>p));if(prices.length<2)continue;const last=out.at(-1);if(last&&last.end+1===day&&key(last.prices)===key(prices))last.end=days[i+1]-1;else out.push({start:day,end:days[i+1]-1,prices});}
  return out;
 }
+function buildGMReports(report,matched,selected,asOf,issue){
+ const gmRows=matched.filter(isGM),selectedByBranch=groupBy(selected.filter(isGM),selectionKey);
+ for(const [branch,source]of groupBy(gmRows,selectionKey)){
+  const chosen=selectedByBranch.get(branch)||[];
+  if(!chosen.length){report.gmCurrent.push({...context(source[0]),po:'',poKey:'',lineKey:'',asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:'gmUnselected'});continue;}
+  for(const rr of groupBy(chosen,poBranchKey).values()){
+   const first=rr[0],row={...context(first),asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:''};
+   try{
+    const effective=[];
+    for(const r of rr){
+     if(!['0','1'].includes(r.Price_Active))fail('gmInvalidPrice');
+     if(r.Price_Active==='0')continue;
+     let a,b;try{a=parseDate(r.effective_date);b=parseDate(r.expiration_date);}catch{fail('gmInvalidPrice');}
+     if(a===null||(b!==null&&b<a))fail('gmInvalidPrice');
+     if(a>asOf||(b!==null&&b<asOf))continue;
+     if(!r.currency_code||!['pcs','Ea'].includes(r.unit))fail('gmBasis');
+     const price=decimal(r.Price);if(compare(price,decimal(r.Raw_Price))!==0)fail('gmInvalidPrice');
+     effective.push({price,currency:r.currency_code,unit:canonicalUnit(r.unit),priceKey:r.price_key});
+    }
+    if(!effective.length)fail('gmNoPrice');
+    if(new Set(effective.map(r=>key(r.currency,r.unit))).size!==1)fail('gmBasis');
+    const amounts=sortedPrices(new Set(effective.map(r=>r.price)));
+    if(amounts.length!==1)fail('gmManyPrices',amounts.join('; '));
+    Object.assign(row,{price:amounts[0],currency:effective[0].currency,unit:effective[0].unit,priceKeys:[...new Set(effective.map(r=>r.priceKey))].join('; '),status:'complete',reason:'gmCurrent'});
+   }catch(e){const info=errorInfo(e);row.reason=['gmNoPrice','gmManyPrices','gmBasis'].includes(info.code)?info.code:'gmInvalidPrice';row.details=iso(asOf)+(info.details?' · '+info.details:'');issue(first,row.reason,row.details);}
+   report.gmCurrent.push(row);
+  }
+ }
+ for(const rr of groupBy(report.gmCurrent,r=>key(r.pcn,r.part,r.revision)).values()){
+  const first=rr[0],valid=rr.filter(r=>r.status==='complete'),unresolved=rr.some(r=>r.status!=='complete');
+  const bases=new Set(valid.map(r=>key(r.currency,r.unit))),oneBasis=bases.size===1;
+  const prices=oneBasis?sortedPrices(new Set(valid.map(r=>r.price))):[];
+  let reason=bases.size>1?'gmBasis':prices.length>1?'gmMismatch':unresolved||!valid.length?'gmIncomplete':'gmEqual';
+  const details=rr.map(r=>[r.customer,r.shipTo||'?',r.po||'?',r.status==='complete'?r.price+' '+r.currency+'/'+r.unit:bilingual(r.reason)].join(' · ')).join(' | ');
+  report.gmConsistency.push({part:first.part,revision:first.revision,pcn:first.pcn,asOf:iso(asOf),commonPrice:reason==='gmEqual'?prices[0]:'',currency:oneBasis?valid[0].currency:'',unit:oneBasis?valid[0].unit:'',distinctCount:oneBasis?prices.length:'',prices:prices.join('; '),difference:oneBasis&&prices.length?subtract(prices.at(-1),prices[0]):'',branchCount:new Set(rr.map(r=>key(r.customer,r.shipToKey))).size,poCount:rr.filter(r=>r.po).length,status:reason==='gmEqual'?'complete':reason==='gmIncomplete'?'partial':'review',reason,gmMembers:details});
+  if(['gmMismatch','gmBasis'].includes(reason)){
+   const source=gmRows.find(r=>r.PCN===first.pcn&&r.Minth_Part_No===first.part&&normalizeRevision(r.revision)===first.revision);
+   issue({...source,customer_code:'GM group',po_no:'',po_key:'',po_line_key:'',price_key:'',currency_code:oneBasis?valid[0].currency:'',unit:oneBasis?valid[0].unit:''},reason,iso(asOf)+' · '+details);
+  }
+ }
+}
 export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  const missing=REQUIRED.filter(x=>!headers.includes(x));if(missing.length)fail('missingHeaders',missing.join(', '));
  let start,end;try{start=parseDate(startText);end=parseDate(endText);}catch{fail('invalidPeriod');}
@@ -94,20 +153,24 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  scope=[...new Map(scope.map(s=>[key(s.PartNo.trim(),normalizeRevision(s.Revision)),{PartNo:s.PartNo.trim(),Revision:normalizeRevision(s.Revision)}])).values()];
  const scopeSet=new Set(scope.map(s=>key(s.PartNo,s.Revision)));
  const matched=rows.filter(r=>scopeSet.has(key(r.Minth_Part_No,normalizeRevision(r.revision))));
- const report={poSelection:[],priceChanges:[],overlaps:[],coverage:[],issues:[],history:[]};
+ const report={poSelection:[],priceChanges:[],overlaps:[],coverage:[],issues:[],history:[],gmCurrent:[],gmConsistency:[]};
  const issue=(r,code,details='')=>report.issues.push({...context(r),priceKey:r.price_key||'',sourceRow:r._line||'',code,details});
  for(const s of scope)if(!matched.some(r=>r.Minth_Part_No===s.PartNo&&normalizeRevision(r.revision)===s.Revision))issue({Minth_Part_No:s.PartNo,revision:s.Revision},'missingScope');
  const blocked=new Set();
- for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.length>1)for(const r of rr){blocked.add(key(r.PCN,r.part_key,r.customer_code));issue(r,'duplicate');}
+ for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key,isGM(r)?r.Ship_To_Key||'':'')).values())if(rr.length>1)for(const r of rr){blocked.add(selectionKey(r));issue(r,'duplicate');}
+ // A shared GM price_key may repeat across addresses, but its source price must agree.
+ for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.some(isGM)&&['part_key','Minth_Part_No','revision','po_key','po_line_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Price','Raw_Price','Price_Active','effective_date','expiration_date','unit','currency_code','customer_part_no','customer_part_revision'].some(f=>new Set(rr.map(r=>r[f])).size>1))for(const r of rr){blocked.add(selectionKey(r));issue(r,'metadata');}
  const selected=[];
- for(const [pk,pr]of groupBy(matched,r=>key(r.PCN,r.part_key,r.customer_code))){
+ for(const [pk,pr]of groupBy(matched,selectionKey)){
   const candidates=[];let block=blocked.has(pk);
   for(const rr of groupBy(pr,r=>r.po_line_key).values()){
-   const r=rr[0],item={...context(r),poDate:r.PO_Date,type:r.PO_Type,releases:r.Releases,status:'excluded',reason:'',details:''};report.poSelection.push(item);
-   const meta=['po_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Minth_Part_No','revision'];
+   const r=rr[0],gm=isGM(r),item={...context(r),poDate:r.PO_Date,type:r.PO_Type,releases:gm?r.Ship_To_Releases:r.Releases,status:'excluded',reason:'',details:''};report.poSelection.push(item);
+   const meta=['po_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Minth_Part_No','revision',...(gm?GM_FIELDS:[])];
    if(meta.some(f=>new Set(rr.map(x=>f==='revision'?normalizeRevision(x[f]):x[f])).size>1)){issue(r,'metadata');block=true;item.status='review';item.reason='metadata';continue;}
    try{
-    const rel=decimal(r.Releases);if(compare(rel,'0')<0)fail('negativeReleases');
+    if(gm&&GM_FIELDS.some(f=>!headers.includes(f)))fail('gmMetadata');
+    if(gm&&(!r.Ship_To_Key||!r.Ship_To_Code||r.Ship_To_Active!=='1'))fail('gmAddress');
+    const rel=decimal(gm?r.Ship_To_Releases:r.Releases);if(compare(rel,'0')<0)fail('negativeReleases');
     if(r.PCN!=='269388')fail('unknownPCN',r.PCN);
     if(r.PO_Type!==(r.PO_Type_Key==='2500'?'Blanket':'Other'))fail('typeMismatch');
     if(r.PO_Type!=='Blanket'){item.reason='notBlanket';continue;}
@@ -122,8 +185,8 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   else if(!pool.length)issue(pr[0],'noPO');
   else{
    const latest=Math.max(...pool.map(x=>x.day)),winners=pool.filter(x=>x.day===latest);
-   for(const x of pool){if(x.day<latest)x.item.reason='older';else if(winners.length>1){x.item.status='review';x.item.reason='tie';}else{x.item.status='selected';x.item.reason=hasPositive?'eligible':'fallbackZero';selected.push(...x.rr);}}
-   if(winners.length>1)issue(pr[0],'tie');
+   for(const x of pool){if(x.day<latest)x.item.reason='older';else if(winners.length>1&&!isGM(pr[0])){x.item.status='review';x.item.reason='tie';}else{x.item.status='selected';x.item.reason=isGM(pr[0])?(hasPositive?'gmBatch':'gmZeroBatch'):(hasPositive?'eligible':'fallbackZero');selected.push(...x.rr);}}
+   if(winners.length>1&&!isGM(pr[0]))issue(pr[0],'tie');
   }
  }
  const blockedDates=new Set();
@@ -160,13 +223,18 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   }
   report.coverage.push(coverage);
  }
- report.summary={version:VERSION,source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length};
+ buildGMReports(report,matched,selected,end,issue);
+ report.summary={version:VERSION,source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length,gmAsOf:iso(end),gmGroups:report.gmConsistency.length};
  return report;
 }
 export const COLUMNS={part:['Part No.','零件号'],revision:['Revision','版本'],pcn:['PCN','PCN'],partKey:['Part key','零件键'],customer:['Customer','客户'],po:['PO','PO'],poKey:['PO key','PO键'],lineKey:['PO line key','PO明细键'],currency:['Currency','币种'],unit:['Comparison unit','比较单位'],poDate:['PO date','PO日期'],type:['PO type','PO类型'],releases:['Releases','Releases数量'],status:['Status','状态'],reason:['Reason','原因'],effective:['Effective date','生效日'],oldPrice:['Previous price','前序价格'],newPrice:['New price','新价格'],difference:['Difference','差额'],note:['Note','说明'],start:['Start date','开始日期'],end:['End date','结束日期'],distinctCount:['Distinct prices','不同售价数量'],prices:['Prices','售价列表'],rawRows:['Source price rows','原始价格行数'],intervals:['Analysis intervals','分析区间数'],changeCount:['Changes','调价事件数'],overlapCount:['Overlap intervals','重叠区间数'],priceKey:['Price key','价格键'],sourceRow:['CSV row','CSV行号'],code:['Issue','问题'],customerPart:['Customer part No.','客户零件号'],customerRevision:['Customer revision','客户版本'],price:['Price','售价'],originalUnit:['Original unit','原始单位'],expiration:['Expiration date','失效日'],componentCount:['Component count','组件数量'],componentReview:['Component review flag','组件核对标记'],priceActive:['Price Active (current)','价格Active（当前）']};
 const BASE=['part','revision','customer','po','currency','unit','pcn','partKey','poKey','lineKey'];
 const TRACE=['pcn','partKey','poKey','lineKey'];
 export const SCHEMAS={poSelection:['part','revision','customer','po','poDate','type','releases','status','reason',...TRACE],priceChanges:['part','revision','customer','po','effective','oldPrice','newPrice','difference','currency','unit','note',...TRACE],overlaps:['part','revision','customer','po','start','end','distinctCount','prices','currency','unit',...TRACE],coverage:['part','revision','customer','po','status','rawRows','intervals','changeCount','overlapCount','currency','unit',...TRACE],issues:['part','revision','customer','po','code','priceKey','sourceRow','currency','unit',...TRACE],history:['part','revision','customer','po','price','priceActive','effective','expiration','currency','originalUnit','customerPart','customerRevision','priceKey','sourceRow','unit','componentCount','componentReview',...TRACE]};
+Object.assign(COLUMNS,{shipTo:['Ship-to','收货地址'],shipToKey:['Ship-to key','收货地址键'],asOf:['As-of date','基准日'],priceKeys:['Current price keys','当前价格键'],commonPrice:['Common effective price','共同有效售价'],branchCount:['Customer/Ship-to branches','客户／地址分支数'],poCount:['Selected PO lines/Ship-tos','选中PO明细／地址数'],gmMembers:['Branch / PO price details','分支／PO售价明细']});
+for(const name of Object.keys(SCHEMAS)){const at=SCHEMAS[name].indexOf('customer');if(at>=0)SCHEMAS[name].splice(at+1,0,'shipTo','shipToKey');}
+SCHEMAS.gmCurrent=['part','revision','customer','shipTo','po','asOf','price','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
+SCHEMAS.gmConsistency=['part','revision','asOf','commonPrice','currency','unit','status','reason','distinctCount','prices','difference','branchCount','poCount','gmMembers','pcn'];
 export function cell(row,field,lang='en',both=false){
  const v=row[field]??'';
  if(['status','reason','note','code'].includes(field)&&v){return String(v).split('|').map(c=>both?bilingual(c,row.details||''):message(c,row.details||'',lang)).join('; ');}
@@ -177,5 +245,6 @@ export function toCSV(report,name){
  const columns=SCHEMAS[name];const safe=v=>typeof v==='string'&&/^[=+@]/.test(v)?"'"+v:v;
  return '\uFEFF'+[columns.map(k=>quote(COLUMNS[k][0]+' / '+COLUMNS[k][1])).join(','),...report[name].map(r=>columns.map(k=>quote(safe(cell(r,k,'en',true)))).join(','))].join('\r\n')+'\r\n';
 }
+
 
 

@@ -25,21 +25,24 @@ flowchart LR
 
 Overlap checks require `Price_Active` from the updated SQL. Only currently active prices participate; inactive records remain in history and price-change comparisons. / 重叠检查需要新版 SQL 的 `Price_Active` 列；仅纳入当前有效价格，inactive 记录仍保留在历史和调价比较中。
 
-Select POs separately for each part / revision / customer. Blanket POs with positive Releases take priority. If all Blanket Releases are zero, use the latest Blanket PO date; tied dates require confirmation. / 每个零件／版本／客户分别筛选 PO。优先选择 Releases > 0 的 Blanket；全部为零时按最新 Blanket PO 日期选择；最新日期并列需确认。
+Select POs separately for each part / revision / customer. Blanket POs with positive Releases take priority. If all Blanket Releases are zero, use the latest Blanket PO date; tied dates require confirmation except for the GM batch rule below. / 每个零件／版本／客户分别筛选 PO。优先选择 Releases > 0 的 Blanket；全部为零时按最新 Blanket PO 日期选择；最新日期并列需确认（GM 使用下述批次规则）。
 
 When the latest earlier effective date has multiple old prices, prefer the price expiring the day before the new price. Multiple different qualifying prices still require confirmation. / 前序最近生效日有多个旧价时，优先采用新价前一天失效的旧价；仍有多个不同价格符合时需确认。
 
+GM group: GMNA, GM-NA 1, GMCCA, GM Canada SPO, GM Henniges, GM Henniges SPO. Re-export with the updated SQL to include approved Ship-to keys, codes, status and Releases. GM selects the latest batch per customer/Ship-to and retains same-day POs. All branches must have the same valid price, currency and unit on the period end date to confirm a common price; unresolved branches stay pending. / GM 按客户＋Ship-to 选最新批次并保留同日 PO；需用新版 SQL 重新导出地址、状态和地址级 Releases。以检查结束日比价，价格、币种和单位一致且无未确定分支才确认共同售价。
+
 ## Reports / 输出
 
-PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history
+PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history · GM current prices · GM price consistency
 
-PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 价格明细
+PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 价格明细 · GM 当前价格 · GM 价格一致性
 
 ## Local development / 本机开发
 
-`python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs`
+`python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs gm.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
+
 
 
 
