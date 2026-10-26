@@ -1,8 +1,8 @@
-import {REQUIRED,SCHEMAS,COLUMNS,message,cell,parseCSV,toCSV} from './engine.js?v=4.2';
+import {REQUIRED,SCHEMAS,COLUMNS,message,cell,parseCSV,toCSV} from './engine.js?v=4.3';
 import {zipFiles} from './zip.js';
 const $=id=>document.getElementById(id);
 const labels={
- gmCurrent:['GM current prices','GM 当前价格'],gmConsistency:['GM price consistency','GM 价格一致性'],notesGMCurrent:['Selected GM Blanket PO / Ship-to prices effective on the period end date; Spot Buy-only branches are excluded. Active status and inclusive expiration are required.','排除只有 Spot Buy 的分支；按检查结束日核对各 GM Blanket PO／Ship-to 的 Active 有效售价，失效日当天仍有效。'],notesGMConsistency:['A common price is confirmed only when all selected GM branches/POs resolve to the same amount and currency/unit basis.','仅当所有所选 GM 分支／PO 的价格、币种及单位均已确定且一致时，确认共同售价。'],
+ gmCurrent:['GM current prices','GM 当前价格'],gmConsistency:['GM price consistency','GM 价格一致性'],notesGMCurrent:['Selected GM Blanket PO / Ship-to prices effective on the period end date; Spot Buy-only branches are excluded. POs with no Active price anywhere in the period are excluded; earlier-period-only prices remain pending.','排除只有 Spot Buy 的分支；按检查结束日核对各 GM Blanket PO／Ship-to 的 Active 有效售价，整期无有效价的 PO 排除；期间曾有价但结束日无价仍待确认。'],notesGMConsistency:['A common price is confirmed only when all compared GM branches/POs resolve to the same amount and currency/unit basis.','仅当所有参与比较的 GM 分支／PO 的价格、币种及单位均已确定且一致时，确认共同售价。'],
  showAll:['Show all','展开全部'],collapseScope:['Collapse','收起'],
  worksheet:['Worksheet','工作表'],selectSheet:['Select a worksheet','请选择工作表'],partsLoading:['Reading part list…','正在读取零件清单…'],partsFormat:['Supported part lists: .xlsx, .xls and .csv.','零件清单支持 .xlsx、.xls 和 .csv。'],partsReadError:['Could not read this list. Check that the file is valid and not password-protected. The current list was not changed.','无法读取清单，请检查文件是否有效、是否受密码保护。原清单未更改。'],emptyParts:['The selected sheet contains no part rows. The current list was not changed.','所选工作表没有零件记录，原清单未更改。'],
  downloadSQL:['Download SQL','下载 SQL'],
@@ -31,7 +31,7 @@ function run(){
  clearReport();if(partsPending){setError({label:'selectSheet'});return;}if(!source){setError({label:'chooseFile'});return;}const list=scope();if(!list.length){setError({code:'invalidScope'});return;}
  lock(true);progress('reading');
  source.arrayBuffer().then(buffer=>{
-  worker?.terminate();worker=new Worker(new URL('./worker.js?v=4.2',import.meta.url),{type:'module'});
+  worker?.terminate();worker=new Worker(new URL('./worker.js?v=4.3',import.meta.url),{type:'module'});
   worker.onmessage=({data})=>{if(data.stage)progress(data.stage);if(data.error){setError(data.error);progressKey='';$('progress').hidden=true;lock(false);worker.terminate();}if(data.report){report=data.report;active=report.issues.length?'issues':report.gmConsistency.length?'gmConsistency':'poSelection';page=0;lock(false);progress('done');renderResults();worker.terminate();}};
   worker.onerror=()=>{setError({label:'workerFailed'});lock(false);$('progress').hidden=true;worker.terminate();};
   worker.postMessage({buffer,scope:list,start:$('start').value,end:$('end').value,source:source.name},[buffer]);
@@ -90,6 +90,7 @@ function makeDemo(){partsPending=false;partsWorker?.terminate();lock(false);$("s
 }
 $('demo').onclick=makeDemo;
 addRow();setLanguage();
+
 
 
 

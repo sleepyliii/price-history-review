@@ -35,6 +35,8 @@ All customer/PO prices are rounded half-up to four decimal places before changes
 
 Spot Buy POs and Spot Buy-only branches are excluded from comparison, not treated as unresolved Blanket candidates. Legacy `Other` exports with validated PCN 269388 / type key 2501 are supported. Other unconfirmed types remain pending. / Spot Buy PO 及只有 Spot Buy 的分支不参与比较，不进入待确认；兼容旧导出的 Other＋2501，其他未确认类型仍需核对。
 
+For GM current-price consistency, exclude selected PO/Ship-to rows with no Active effective price anywhere in the review period. A price valid earlier in the period but expired by period end remains pending. History/change audit is retained. If every row is excluded, show excluded with no common price. / GM 当前价比对中，整期无 Active 有效价的 PO／地址明细排除；期间曾有价但结束日无价仍待确认。保留历史及调价检查；全部排除时不确认共同售价。
+
 ## Reports / 输出
 
 PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history · GM current prices · GM price consistency
@@ -46,6 +48,7 @@ PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 
 `python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs gm.test.mjs precision.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
+
 
 
 

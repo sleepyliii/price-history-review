@@ -1,5 +1,5 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.2.0';
+export const VERSION = '4.3.0';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
 // Validated against the supplied Plex Spot Buy PO screenshots and their CSV keys.
@@ -14,10 +14,12 @@ export const messages = {
  gmZeroBatch:['Ship-to Blanket Releases are all zero; latest GM batch retained','该 Ship-to 的 Blanket Releases 全为零，保留最新 GM 批次'],
  gmCurrent:['One distinct Active price on the period end date','检查结束日有一个不同的 Active 有效售价'],
  gmNoPrice:['No Active price effective on the period end date','检查结束日没有 Active 且在有效期内的售价'],
+ gmNoPeriodPrice:['No Active price overlaps the review period; excluded from current-price comparison','整个检查期间内无 Active 有效售价，已排除当前价格比较'],
+ gmAllExcluded:['All selected GM PO/Ship-to rows are excluded; no price comparison','所选 GM PO／地址明细均被排除，无需比价'],
  gmManyPrices:['Several different Active prices on this PO at period end','该 PO 在检查结束日有多个不同的 Active 有效售价'],
  gmInvalidPrice:['Current GM price cannot be determined from invalid price/status/date data','价格、状态或日期无效，无法确定 GM 当前售价'],
  gmUnselected:['This GM branch has no selected PO; group consistency is incomplete','该 GM 分支未选出 PO，组内一致性检查未完成'],
- gmEqual:['All selected GM branches/POs have the same effective price at period end','所选 GM 分支及 PO 在检查结束日的有效售价相同'],
+ gmEqual:['All compared GM branches/POs have the same effective price at period end','参与比较的 GM 分支及 PO 在检查结束日的有效售价相同'],
  gmMismatch:['Selected GM branches/POs have different effective prices','所选 GM 分支或 PO 的有效售价不同'],
  gmIncomplete:['Some GM branches/POs are unresolved; no common price is confirmed','部分 GM 分支或 PO 未确定，不确认共同售价'],
  gmBasis:['GM currency/unit bases differ; no conversion or common price assumed','GM 币种或单位不同，不换算、不确认共同售价'],
@@ -118,7 +120,7 @@ export function overlapping(records,start,end){
  for(let i=0;i<days.length-1;i++){const day=days[i];for(const [p,n]of events.get(day)||[])active.set(p,(active.get(p)||0)+n);const prices=sortedPrices([...active].filter(([,n])=>n>0).map(([p])=>p));if(prices.length<2)continue;const last=out.at(-1);if(last&&last.end+1===day&&key(last.prices)===key(prices))last.end=days[i+1]-1;else out.push({start:day,end:days[i+1]-1,prices});}
  return out;
 }
-function buildGMReports(report,matched,selected,asOf,issue){
+function buildGMReports(report,matched,selected,periodStart,asOf,issue){
  const gmRows=matched.filter(r=>isGM(r)&&!isSpotBuy(r)),selectedByBranch=groupBy(selected.filter(isGM),selectionKey);
  for(const [branch,source]of groupBy(gmRows,selectionKey)){
   const chosen=selectedByBranch.get(branch)||[];
@@ -126,33 +128,34 @@ function buildGMReports(report,matched,selected,asOf,issue){
   for(const rr of groupBy(chosen,poBranchKey).values()){
    const first=rr[0],row={...context(first),asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:''};
    try{
-    const effective=[];
+    const effective=[];let activeDuringPeriod=false;
     for(const r of rr){
      if(!['0','1'].includes(r.Price_Active))fail('gmInvalidPrice');
      if(r.Price_Active==='0')continue;
      let a,b;try{a=parseDate(r.effective_date);b=parseDate(r.expiration_date);}catch{fail('gmInvalidPrice');}
      if(a===null||(b!==null&&b<a))fail('gmInvalidPrice');
+     if(a<=asOf&&(b===null||b>=periodStart))activeDuringPeriod=true;
      if(a>asOf||(b!==null&&b<asOf))continue;
      if(!r.currency_code||!['pcs','Ea'].includes(r.unit))fail('gmBasis');
      const price=price4(r.Price);if(compare(price,price4(r.Raw_Price))!==0)fail('gmInvalidPrice');
      effective.push({price,currency:r.currency_code,unit:canonicalUnit(r.unit),priceKey:r.price_key});
     }
-    if(!effective.length)fail('gmNoPrice');
+    if(!effective.length){if(activeDuringPeriod)fail('gmNoPrice','An Active price existed during the period / 期间内曾有有效价');else fail('gmNoPeriodPrice',iso(periodStart)+' — '+iso(asOf));}
     if(new Set(effective.map(r=>key(r.currency,r.unit))).size!==1)fail('gmBasis');
     const amounts=sortedPrices(new Set(effective.map(r=>r.price)));
     if(amounts.length!==1)fail('gmManyPrices',amounts.map(formatPrice).join('; '));
     Object.assign(row,{price:amounts[0],currency:effective[0].currency,unit:effective[0].unit,priceKeys:[...new Set(effective.map(r=>r.priceKey))].join('; '),status:'complete',reason:'gmCurrent'});
-   }catch(e){const info=errorInfo(e);row.reason=['gmNoPrice','gmManyPrices','gmBasis'].includes(info.code)?info.code:'gmInvalidPrice';row.details=iso(asOf)+(info.details?' · '+info.details:'');issue(first,row.reason,row.details);}
+   }catch(e){const info=errorInfo(e);row.reason=['gmNoPrice','gmNoPeriodPrice','gmManyPrices','gmBasis'].includes(info.code)?info.code:'gmInvalidPrice';row.details=info.code==='gmNoPeriodPrice'?info.details:iso(asOf)+(info.details?' · '+info.details:'');if(info.code==='gmNoPeriodPrice')row.status='excluded';else issue(first,row.reason,row.details);}
    report.gmCurrent.push(row);
   }
  }
  for(const rr of groupBy(report.gmCurrent,r=>key(r.pcn,r.part,r.revision)).values()){
-  const first=rr[0],valid=rr.filter(r=>r.status==='complete'),unresolved=rr.some(r=>r.status!=='complete');
+  const first=rr[0],participating=rr.filter(r=>r.status!=='excluded'),valid=participating.filter(r=>r.status==='complete'),unresolved=participating.some(r=>r.status!=='complete');
   const bases=new Set(valid.map(r=>key(r.currency,r.unit))),oneBasis=bases.size===1;
   const prices=oneBasis?sortedPrices(new Set(valid.map(r=>r.price))):[];
-  let reason=bases.size>1?'gmBasis':prices.length>1?'gmMismatch':unresolved||!valid.length?'gmIncomplete':'gmEqual';
+  let reason=!participating.length?'gmAllExcluded':bases.size>1?'gmBasis':prices.length>1?'gmMismatch':unresolved||!valid.length?'gmIncomplete':'gmEqual';
   const details=rr.map(r=>[r.customer,r.shipTo||'?',r.po||'?',r.status==='complete'?formatPrice(r.price)+' '+r.currency+'/'+r.unit:bilingual(r.reason)].join(' · ')).join(' | ');
-  report.gmConsistency.push({part:first.part,revision:first.revision,pcn:first.pcn,asOf:iso(asOf),commonPrice:reason==='gmEqual'?prices[0]:'',currency:oneBasis?valid[0].currency:'',unit:oneBasis?valid[0].unit:'',distinctCount:oneBasis?prices.length:'',prices:prices.join('; '),difference:oneBasis&&prices.length?subtract(prices.at(-1),prices[0]):'',branchCount:new Set(rr.map(r=>key(r.customer,r.shipToKey))).size,poCount:rr.filter(r=>r.po).length,status:reason==='gmEqual'?'complete':reason==='gmIncomplete'?'partial':'review',reason,gmMembers:details});
+  report.gmConsistency.push({part:first.part,revision:first.revision,pcn:first.pcn,asOf:iso(asOf),commonPrice:reason==='gmEqual'?prices[0]:'',currency:oneBasis?valid[0].currency:'',unit:oneBasis?valid[0].unit:'',distinctCount:oneBasis?prices.length:'',prices:prices.join('; '),difference:oneBasis&&prices.length?subtract(prices.at(-1),prices[0]):'',branchCount:new Set(participating.map(r=>key(r.customer,r.shipToKey))).size,poCount:participating.filter(r=>r.po).length,status:reason==='gmEqual'?'complete':reason==='gmAllExcluded'?'excluded':reason==='gmIncomplete'?'partial':'review',reason,gmMembers:details});
   if(['gmMismatch','gmBasis'].includes(reason)){
    const source=gmRows.find(r=>r.PCN===first.pcn&&r.Minth_Part_No===first.part&&normalizeRevision(r.revision)===first.revision);
    issue({...source,customer_code:'GM group',po_no:'',po_key:'',po_line_key:'',price_key:'',currency_code:oneBasis?valid[0].currency:'',unit:oneBasis?valid[0].unit:''},reason,iso(asOf)+' · '+details);
@@ -244,7 +247,7 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   }
   report.coverage.push(coverage);
  }
- buildGMReports(report,matched,selected,end,issue);
+ buildGMReports(report,matched,selected,start,end,issue);
  report.summary={version:VERSION,priceDecimals:4,priceRounding:'half_up',source:sourceName,start:startText,end:endText,scope,sourceRows:rows.length,matchedRows:matched.length,selectedRows:selected.length,selectedLines:report.poSelection.filter(r=>r.status==='selected').length,changes:report.priceChanges.length,overlaps:report.overlaps.length,issues:report.issues.length,gmAsOf:iso(end),gmGroups:report.gmConsistency.length};
  return report;
 }
@@ -252,7 +255,7 @@ export const COLUMNS={part:['Part No.','零件号'],revision:['Revision','版本
 const BASE=['part','revision','customer','po','currency','unit','pcn','partKey','poKey','lineKey'];
 const TRACE=['pcn','partKey','poKey','lineKey'];
 export const SCHEMAS={poSelection:['part','revision','customer','po','poDate','type','releases','status','reason',...TRACE],priceChanges:['part','revision','customer','po','effective','oldPrice','newPrice','difference','currency','unit','note',...TRACE],overlaps:['part','revision','customer','po','start','end','distinctCount','prices','currency','unit',...TRACE],coverage:['part','revision','customer','po','status','rawRows','intervals','changeCount','overlapCount','currency','unit',...TRACE],issues:['part','revision','customer','po','code','priceKey','sourceRow','currency','unit',...TRACE],history:['part','revision','customer','po','price','priceActive','effective','expiration','currency','originalUnit','customerPart','customerRevision','priceKey','sourceRow','unit','componentCount','componentReview',...TRACE]};
-Object.assign(COLUMNS,{shipTo:['Ship-to','收货地址'],shipToKey:['Ship-to key','收货地址键'],asOf:['As-of date','基准日'],priceKeys:['Current price keys','当前价格键'],commonPrice:['Common effective price','共同有效售价'],branchCount:['Customer/Ship-to branches','客户／地址分支数'],poCount:['Selected PO lines/Ship-tos','选中PO明细／地址数'],gmMembers:['Branch / PO price details','分支／PO售价明细']});
+Object.assign(COLUMNS,{shipTo:['Ship-to','收货地址'],shipToKey:['Ship-to key','收货地址键'],asOf:['As-of date','基准日'],priceKeys:['Current price keys','当前价格键'],commonPrice:['Common effective price','共同有效售价'],branchCount:['Compared customer/Ship-to branches','参与客户／地址分支数'],poCount:['Compared PO lines/Ship-tos','参与PO明细／地址数'],gmMembers:['Branch / PO price details','分支／PO售价明细']});
 Object.assign(COLUMNS,{sourcePrice:['Original source Price','原始Price'],sourceRawPrice:['Original source Raw_Price','原始Raw_Price']});
 SCHEMAS.history.push('sourcePrice','sourceRawPrice');
 SCHEMAS.coverage.splice(SCHEMAS.coverage.indexOf('status')+1,0,'reason');
@@ -271,6 +274,7 @@ export function toCSV(report,name){
  const columns=SCHEMAS[name];const safe=v=>typeof v==='string'&&/^[=+@]/.test(v)?"'"+v:v;
  return '\uFEFF'+[columns.map(k=>quote(COLUMNS[k][0]+' / '+COLUMNS[k][1])).join(','),...report[name].map(r=>columns.map(k=>quote(safe(cell(r,k,'en',true)))).join(','))].join('\r\n')+'\r\n';
 }
+
 
 
 
