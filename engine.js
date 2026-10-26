@@ -1,14 +1,15 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '3.7.0';
+export const VERSION = '3.8.0';
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ comparisonExpiration:['Several previous prices shared the latest earlier effective date; selected the price expiring the day before the new price','前序最近生效日有多个售价，采用新价生效前一天失效的旧价'],
  invalidActive:['Price Active is missing or invalid; overlap checking is paused for this group. Re-export using the updated SQL','价格 Active 缺失或无效，暂停该组重叠检查；请用新版 SQL 重新导出'],
  selected:['Selected','选中'],excluded:['Excluded','排除'],review:['Needs confirmation','待确认'],paused:['Paused','暂停'],complete:['Completed','已完成'],partial:['Partial results; confirmation required','部分结果待确认'],
  eligible:['Blanket, Releases > 0 and latest PO date','Blanket、Releases > 0 且 PO 日期最新'],fallbackZero:['All Blanket Releases are zero; latest Blanket PO date selected','Blanket 的 Releases 全为零，选取最新 Blanket PO 日期'],notBlanket:['Not Blanket','不是 Blanket'],noReleases:['Zero Releases; a Blanket PO with positive Releases takes priority','Releases 为零，优先选择 Releases > 0 的 Blanket PO'],older:['A newer eligible PO exists','存在日期更新的合格 PO'],tie:['Latest eligible PO dates are tied; no automatic selection','最新合格 PO 日期并列，不自动选择'],
  missingScope:['Part / specified revision not found in export','导出中未找到指定零件及版本'],noPO:['No eligible Blanket PO','没有合格的 Blanket PO'],metadata:['Inconsistent selection fields within one PO line','同一 PO 明细的筛选字段不一致'],duplicate:['Duplicate price_key; confirmation required','price_key 重复，需要确认'],blocked:['PO selection paused because of an unresolved issue','因存在待确认事项，暂停 PO 选择'],
  unknownPCN:['Blanket mapping is not confirmed for this PCN','此 PCN 的 Blanket 类型映射尚未确认'],typeMismatch:['PO type key and label do not match','PO 类型键与标签不一致'],negativeReleases:['Negative Releases; confirmation required','Releases 为负数，需要确认'],invalidNumber:['Missing or invalid numeric value','数字缺失或无效'],badPODate:['Missing or invalid PO date','PO 日期缺失或无效'],
  missingDate:['Missing effective date; this comparison group is paused','缺少生效日期，暂停该比较组'],reverseDate:['Expiration precedes effective date; this comparison group is paused','失效日期早于生效日期，暂停该比较组'],badDate:['Invalid date or non-midnight price timestamp; confirmation required','日期无效或价格日期含非零时分秒，需要确认'],unknownUnit:['Unit has not been confirmed','单位尚未确认'],missingIdentity:['Currency or unit is missing','币种或单位缺失'],priceMismatch:['Price differs from Raw_Price; use the corrected SQL export','Price 与 Raw_Price 不一致，请使用售价修正版 SQL'],
- firstPrice:['No earlier price; cannot determine a price change','没有更早价格，无法判断是否调价'],ambiguousPrice:['Several prices on one effective date; no unique old/new pairing','同一生效日有多个不同售价，无法唯一配对旧价与新价'],comparison:['Compared with the most recent earlier effective-date price; overlaps are listed separately','对比更早最近生效日的售价；有效期重叠另列'],multiCustomers:['Eligible POs span multiple customers; confirmation required','合格 PO 涉及多个客户，需要确认'],
+ firstPrice:['No earlier price; cannot determine a price change','没有更早价格，无法判断是否调价'],ambiguousPrice:['Cannot uniquely determine the previous/new price pair','无法唯一确定旧价与新价'],comparison:['Compared with the most recent earlier effective-date price; overlaps are listed separately','对比更早最近生效日的售价；有效期重叠另列'],multiCustomers:['Eligible POs span multiple customers; confirmation required','合格 PO 涉及多个客户，需要确认'],
  missingHeaders:['Missing required CSV columns','CSV 缺少必需列'],malformedCSV:['Malformed CSV. Use the original Plex export','CSV 格式无效，请使用 Plex 原始导出'],emptyCSV:['The CSV contains no data','CSV 没有数据'],invalidScope:['Enter at least one part; every row must include a revision field (blank means blank revision)','请填写至少一个零件；每行需有版本字段，留空明确代表空白版本'],invalidPeriod:['Enter valid start and end dates, with start no later than end','请填写有效起止日期，开始日期不能晚于结束日期'],
 };
 export function message(code,details='',lang='en') { const m=messages[code]||[code,code]; return m[lang==='zh'?1:0]+(details?' · '+details:''); }
@@ -140,15 +141,19 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   }
   const rec=[...dedup.values()],coverage={...base,status:invalid?'paused':'complete',rawRows:rr.length,intervals:rec.length,changeCount:'',overlapCount:''};
   if(!invalid){
-   const batches=groupBy(rec,r=>r.start);let previous=null,pending=false;const oldChanges=report.priceChanges.length,oldOverlaps=report.overlaps.length;
+   const batches=groupBy(rec,r=>r.start);let previous=null,previousRecords=[],previousDay=null,pending=false;const oldChanges=report.priceChanges.length,oldOverlaps=report.overlaps.length;
    for(const day of [...batches.keys()].sort((a,b)=>a-b)){
     const prices=sortedPrices(new Set(batches.get(day).map(r=>r.price)));
     if(day>=start&&day<=end&&(previous===null||key(previous)!==key(prices))){
      if(previous===null){issue(first,'firstPrice',iso(day));pending=true;}
-     else if(previous.length!==1||prices.length!==1){issue(first,'ambiguousPrice',iso(day));pending=true;}
-     else report.priceChanges.push({...base,effective:iso(day),oldPrice:previous[0],newPrice:prices[0],difference:subtract(prices[0],previous[0]),note:'comparison'});
+     else{
+      let oldPrices=previous,note='comparison';
+      if(previous.length>1){const expiring=sortedPrices(new Set(previousRecords.filter(r=>r.end===day-1).map(r=>r.price)));if(expiring.length===1){oldPrices=expiring;note='comparisonExpiration';}}
+      if(oldPrices.length!==1||prices.length!==1){issue(first,'ambiguousPrice','New effective date / 新价生效日: '+iso(day)+'; Previous effective date / 前序生效日: '+iso(previousDay)+'; Previous prices / 前序售价: '+previous.join('; ')+'; New prices / 新售价: '+prices.join('; '));pending=true;}
+      else if(compare(oldPrices[0],prices[0])!==0)report.priceChanges.push({...base,effective:iso(day),oldPrice:oldPrices[0],newPrice:prices[0],difference:subtract(prices[0],oldPrices[0]),note});
+     }
     }
-    previous=prices;
+    previous=prices;previousRecords=batches.get(day);previousDay=day;
    }
    if(!activeInvalid)for(const s of overlapping([...activeDedup.values()],start,end))report.overlaps.push({...base,start:iso(s.start),end:iso(s.end),distinctCount:s.prices.length,prices:s.prices.join('; ')});
    coverage.changeCount=report.priceChanges.length-oldChanges;coverage.overlapCount=activeInvalid?'':report.overlaps.length-oldOverlaps;if(pending||activeInvalid)coverage.status='partial';

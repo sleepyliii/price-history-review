@@ -27,6 +27,8 @@ Overlap checks require `Price_Active` from the updated SQL. Only currently activ
 
 Select POs separately for each part / revision / customer. Blanket POs with positive Releases take priority. If all Blanket Releases are zero, use the latest Blanket PO date; tied dates require confirmation. / 每个零件／版本／客户分别筛选 PO。优先选择 Releases > 0 的 Blanket；全部为零时按最新 Blanket PO 日期选择；最新日期并列需确认。
 
+When the latest earlier effective date has multiple old prices, prefer the price expiring the day before the new price. Multiple different qualifying prices still require confirmation. / 前序最近生效日有多个旧价时，优先采用新价前一天失效的旧价；仍有多个不同价格符合时需确认。
+
 ## Reports / 输出
 
 PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history
@@ -38,6 +40,7 @@ PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 
 `python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
+
 
 
 
