@@ -47,7 +47,7 @@ function renderResults(){
 }
 function renderTabsOnly(){for(const [index,name]of Object.keys(SCHEMAS).entries()){const button=$('tabs').children[index];button.classList.toggle('active',active===name);button.setAttribute('aria-current',active===name?'page':'false');}}
 function renderTable(){
- $('table-title').textContent=t(active);$('table-note').textContent=t(tableNotes[active]);const cols=SCHEMAS[active].filter(k=>!['pcn','partKey','poKey','lineKey','shipToKey','sourcePrice','sourceRawPrice'].includes(k)&&(k!=='shipTo'||active==='gmCurrent'||report[active].some(r=>r.shipToKey||r.shipTo)));const head=document.createElement('tr');for(const c of cols)head.append(element('th',COLUMNS[c][lang==='zh'?1:0]));$('result-head').replaceChildren(head);$('result-body').replaceChildren();const rows=report[active],size=50,part=rows.slice(page*size,(page+1)*size);
+ $('table-title').textContent=t(active);$('table-note').textContent=t(tableNotes[active]);const cols=SCHEMAS[active].filter(k=>!['pcn','partKey','poKey','lineKey','shipToKey','sourcePrice','sourceRawPrice','gmMembers'].includes(k)&&(k!=='shipTo'||active==='gmCurrent'||report[active].some(r=>r.shipToKey||r.shipTo)));const head=document.createElement('tr');for(const c of cols)head.append(element('th',COLUMNS[c][lang==='zh'?1:0]));$('result-head').replaceChildren(head);$('result-body').replaceChildren();const rows=report[active],size=50,part=rows.slice(page*size,(page+1)*size);
  if(!part.length){const td=element('td',t('none'));td.colSpan=cols.length;const tr=document.createElement('tr');tr.append(td);$('result-body').append(tr);}
  for(const r of part){const tr=document.createElement('tr');for(const c of cols){const td=document.createElement('td');const value=cell(r,c,lang);if(c==='status')td.append(element('span',value,'badge '+r.status));else td.textContent=value;tr.append(td);}$('result-body').append(tr);}
  const total=Math.max(1,Math.ceil(rows.length/size));$('pagination').replaceChildren(element('span',rows.length+' '+t('records')),element('span',t('page')+' '+(page+1)+' '+t('of')+' '+total));for(const [label,offset]of [['previous',-1],['next',1]]){const b=element('button',t(label));b.disabled=page+offset<0||page+offset>=total;b.onclick=()=>{page+=offset;renderTable();};$('pagination').append(b);}
@@ -90,6 +90,7 @@ function makeDemo(){partsPending=false;partsWorker?.terminate();lock(false);$("s
 }
 $('demo').onclick=makeDemo;
 addRow();setLanguage();
+
 
 
 
