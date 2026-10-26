@@ -1,5 +1,5 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.6.0';
+export const VERSION = '4.7.0';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
 export const REPORTS=['currentPrices','priceChanges','overlaps','issues','history','gmCurrent','gmConsistency'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
@@ -8,6 +8,10 @@ const isSpotBuy=r=>r.PCN==='269388'&&r.PO_Type_Key==='2501'&&['Other','Spot Buy'
 const GM_FIELDS=['Ship_To_Key','Ship_To_Code','Ship_To_Releases','Ship_To_Active'];
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ currentActivityUnknown:['Shipped is missing or inconsistent; cannot apply the zero-activity current-price rule','Shipped 缺失或不一致，无法应用当前价零活动排除规则'],
+ currentActivityInvalid:['Shipped is invalid; current-price activity needs confirmation','Shipped 数量无效，当前价活动状态需确认'],
+ currentAllCustomersUnused:['All customer POs have zero Releases and zero Shipped; retained for confirmation','所有客户 PO 的 Releases 与 Shipped 均为 0，保留并待确认'],
+ currentActivityUnresolved:['No other customer PO has confirmed activity; retain the zero-activity PO for confirmation','尚未确认其他客户 PO 有活动，保留零活动 PO 并待确认'],
  comparisonActiveNew:['Same-day inactive correction prices excluded from the new-price candidates','同日 inactive 更正记录不作为新价候选'],
  currentPrice:['One distinct Active price on the period end date','检查结束日有一个不同的 Active 有效售价'],
  currentNoPrice:['No Active price on period end, although a price existed during the period','期间内曾有有效价，但检查结束日没有有效价'],
@@ -173,9 +177,40 @@ function buildGMReports(report,matched,selected,periodStart,asOf,issue){
   }
  }
 }
+function currentActivityPlan(selected){
+ const excluded=new Set(),review=new Map(),pending=[];
+ const identity=r=>key(r.PCN,r.po_line_key);
+ for(const rr of groupBy(selected,r=>key(r.PCN,r.Minth_Part_No,normalizeRevision(r.revision))).values()){
+  if(new Set(rr.map(r=>r.customer_code)).size<2)continue;
+  const lines=[];
+  for(const source of groupBy(rr,identity).values()){
+   const first=source[0],id=identity(first);let state='unknown',code='';
+   try{
+    const releases=decimal(first.Releases);
+    if(compare(releases,'0')>0)state='used';
+    else{
+     const shippedValues=new Set(source.map(r=>r.Shipped));
+     if(shippedValues.size!==1||first.Shipped===undefined||String(first.Shipped).trim()===''||String(first.Shipped).toUpperCase()==='NULL')code='currentActivityUnknown';
+     else{const shipped=decimal(first.Shipped);if(compare(shipped,'0')<0)code='currentActivityInvalid';else state=compare(shipped,'0')===0?'zero':'used';}
+    }
+   }catch{code='currentActivityInvalid';}
+   lines.push({first,id,state,code});
+  }
+  const hasActivity=lines.some(r=>r.state==='used'),allZero=lines.every(r=>r.state==='zero');
+  for(const line of lines){
+   if(line.state==='zero'&&hasActivity){excluded.add(line.id);continue;}
+   const code=line.code||(line.state==='zero'?(allZero?'currentAllCustomersUnused':'currentActivityUnresolved'):'');
+   if(code){review.set(line.id,code);pending.push({source:line.first,code,details:''});}
+  }
+ }
+ return {excluded,review,pending,identity};
+}
 function buildCurrentPrices(report,selected,periodStart,asOf){
+ const activity=currentActivityPlan(selected);
+ const markActivity=(row,source)=>{const code=activity.review.get(activity.identity(source));return code?{...row,status:'review',reason:code}:row;};
  const codes={gmCurrent:'currentPrice',gmNoPrice:'currentNoPrice',gmNoPeriodPrice:'currentNoPeriodPrice',gmManyPrices:'currentManyPrices',gmInvalidPrice:'currentInvalidPrice',gmBasis:'currentBasis'};
- for(const rr of groupBy(report.gmCurrent.filter(r=>r.po&&r.status!=='excluded'),r=>key(r.pcn,r.partKey,r.part,r.revision,r.customer)).values()){
+ const gmRows=report.gmCurrent.filter(r=>r.po&&r.status!=='excluded'&&!activity.excluded.has(key(r.pcn,r.lineKey))).map(row=>markActivity(row,{PCN:row.pcn,po_line_key:row.lineKey}));
+ for(const rr of groupBy(gmRows,r=>key(r.pcn,r.partKey,r.part,r.revision,r.customer)).values()){
   const samePrice=rr.every(r=>r.status==='complete')&&new Set(rr.map(r=>key(r.price,r.currency,r.unit))).size===1;
   for(const group of groupBy(rr,r=>r.status==='complete'?key(r.price,r.currency,r.unit):key('unresolved',r.lineKey,r.shipToKey,r.reason)).values()){
    const unique=field=>[...new Set(group.flatMap(r=>String(r[field]||'').split('; ').filter(Boolean)))].join('; ');
@@ -184,12 +219,13 @@ function buildCurrentPrices(report,selected,periodStart,asOf){
   }
  }
  const pending=[];
- for(const rr of groupBy(selected.filter(r=>!isGM(r)),poBranchKey).values()){
+ for(const rr of groupBy(selected.filter(r=>!isGM(r)&&!activity.excluded.has(activity.identity(r))),poBranchKey).values()){
   const row=resolveCurrentPrice(rr,periodStart,asOf,(source,code,details)=>pending.push({source,code:codes[code]||'currentInvalidPrice',details}));
   row.reason=codes[row.reason]||'currentInvalidPrice';
-  if(row.status!=='excluded')report.currentPrices.push(row);
+  if(row.status!=='excluded')report.currentPrices.push(markActivity(row,rr[0]));
  }
- return pending;
+ const visible=new Set(report.currentPrices.flatMap(r=>String(r.lineKey||'').split('; ').map(lineKey=>key(r.pcn,lineKey))));
+ return [...pending,...activity.pending.filter(p=>visible.has(activity.identity(p.source)))];
 }
 export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  const missing=REQUIRED.filter(x=>!headers.includes(x));if(missing.length)fail('missingHeaders',missing.join(', '));

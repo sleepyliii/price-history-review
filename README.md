@@ -43,6 +43,8 @@ Different Active prices effective on the same PO at period end require confirmat
 
 For same-day new-price corrections, use Active candidates when present; inactive records stay in history. Historical previous-price comparisons are preserved. / 同日新价有更正记录且存在 Active 候选时，仅用 Active 新价比较；inactive 仍保留历史，前序历史价格比较保持原规则。
 
+For the current-price report only, when a part/revision has POs for multiple customers, omit a PO with both Releases and Shipped equal to zero if another customer PO has activity. If all are zero, retain them for confirmation. Shipped is cumulative per PO line from all releases, including completed releases; use the updated SQL export. Missing Shipped is never assumed zero. History, price-change and GM consistency reports retain their existing rules. / 仅当前价报告：同一零件／版本涉及多个客户 PO 时，若其他客户 PO 有活动，排除 Releases 与 Shipped 均为 0 的记录；全部双零则保留待确认。Shipped 按 PO 明细汇总累计发货，包含已完成的 Release；需使用新版 SQL 重新导出。Shipped 缺失不视为零，历史、调价及 GM 一致性规则保持原样。
+
 ## Reports / 输出
 
 Current PO prices · Price changes · Overlapping prices · Items requiring confirmation · Price history · GM current prices · GM price consistency

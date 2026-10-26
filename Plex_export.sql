@@ -1,7 +1,7 @@
 /*
 Customer price export / 客户价格底表导出
-Includes complete price history, PO metadata and current active Releases.
-导出完整价格历史、PO信息及当前有效Releases；可用下方前缀参数缩小范围。
+Includes complete price history, PO metadata, current active Releases and cumulative Shipped.
+导出完整价格历史、PO信息、当前有效 Releases 和累计 Shipped；可用下方前缀参数缩小范围。
 Price = PR.Price. Components are retained for review, not summed into the price.
 售价直接取PR.Price，组件数量仅供核对。
 Keep full price history including inactive prices. Price_Active is current state, not historical state.
@@ -54,6 +54,21 @@ SELECT po_line_key, SUM(Releases) AS Releases
 INTO #ReleaseByPOLine
 FROM #ReleaseByPOLineShipTo
 GROUP BY po_line_key;
+
+/* Cumulative shipped quantity per PO line / 每条 PO 明细累计发货数量。
+   Keep completed/inactive releases; shipment totals must not use active-release filtering.
+   Decimal shipment quantity takes precedence where present.
+   Validated against Customer Orders and the user 2026-10-26 export: 0 / 3192.
+*/
+SELECT
+    R.po_line_key,
+    SUM(COALESCE(R.Quantity_Shipped_DEC, R.Quantity_Shipped, 0)) AS Shipped
+INTO #ShippedByPOLine
+FROM sales_v_release AS R
+JOIN sales_v_po_line AS POL ON POL.po_line_key = R.po_line_key
+JOIN part_v_part AS P ON P.part_key = POL.part_key
+WHERE P.part_no LIKE @PartFilter + '%'
+GROUP BY R.po_line_key;
 
 /* GM approved Ship-to mappings. Each price is intentionally repeated once per
    distinct approved Ship-to; non-GM rows retain their original granularity.
@@ -122,6 +137,7 @@ SELECT
     PR.effective_date,
     PR.expiration_date,
     COALESCE(RL.Releases, 0) AS Releases,
+    COALESCE(SHP.Shipped, 0) AS Shipped,
     GST.Ship_To_Key,
     GST.Ship_To_Code,
     GST.Ship_To_Active,
@@ -143,6 +159,8 @@ JOIN common_v_customer AS C
     ON C.customer_no = PO.customer_no
 LEFT JOIN #ReleaseByPOLine AS RL
     ON RL.po_line_key = POL.po_line_key
+LEFT JOIN #ShippedByPOLine AS SHP
+    ON SHP.po_line_key = POL.po_line_key
 LEFT JOIN #PriceComponentCounts AS PCC
     ON PCC.price_key = PR.price_key
 LEFT JOIN #GMShipTo AS GST
@@ -164,6 +182,7 @@ ORDER BY P.part_no, C.customer_code, PO.po_no, POL.po_line_key, GST.Ship_To_Key,
 
 DROP TABLE #PriceComponentCounts;
 DROP TABLE #ReleaseByPOLine;
+DROP TABLE #ShippedByPOLine;
 DROP TABLE #ReleaseByPOLineShipTo;
 DROP TABLE #GMShipTo;
 
