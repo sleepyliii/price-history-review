@@ -49,6 +49,8 @@ Current PO prices · Price changes · Overlapping prices · Items requiring conf
 
 当前 PO 价格 · 售价变动 · 多个有效售价 · 待确认 · 价格明细 · GM 当前价格 · GM 价格一致性
 
+Download a single report as `.xlsx`, or all seven reports plus the run summary in one workbook. Each report is a separate bilingual worksheet; part/revision/PO identifiers remain text and prices display four decimals. / 当前报告可下载为 `.xlsx`；全部下载会将七份报告和运行摘要放入同一个 Excel 工作簿。每份报告独立工作表，保留中英双语；零件号、版本、PO 保持文本，售价显示四位小数。
+
 ## Local development / 本机开发
 
 `python -m http.server 8766 --bind 127.0.0.1` · `node --test *.test.mjs`

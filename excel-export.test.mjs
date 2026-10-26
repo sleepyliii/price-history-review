@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createReportWorkbook,exportExcel,SHEET_NAMES} from './excel-export.js';
+import {read,utils} from './xlsx.mjs';
+import {analyze,REQUIRED,REPORTS,SCHEMAS} from './engine.js';
+import {fixture,scope} from './fixture.mjs';
+const report=()=>analyze(fixture(),REQUIRED,scope,'2026-10-01','2026-10-21','demo.csv');
+test('all Excel reports are separate bilingual sheets and removed reports stay absent',()=>{const wb=createReportWorkbook(report());assert.equal(wb.SheetNames.length,8);assert.deepEqual(wb.SheetNames.slice(0,7),REPORTS.map(k=>SHEET_NAMES[k]));assert.ok(wb.SheetNames.every(n=>n.length<=31));assert.ok(!wb.SheetNames.some(n=>/selection|coverage/i.test(n)));});
+test('single-report workbook contains only that report',()=>assert.deepEqual(createReportWorkbook(report(),['history']).SheetNames,[SHEET_NAMES.history]));
+test('Excel preserves leading-zero identifiers, long IDs, blank revision and formula-like text',()=>{const r=report();Object.assign(r.history[0],{part:'00123',revision:'09',po:'1234567890123456789',customerPart:'=1+1',customerRevision:''});const wb=read(exportExcel(r,['history']),{type:'array',cellNF:true});const sheet=wb.Sheets[wb.SheetNames[0]],cols=SCHEMAS.history;for(const [k,v]of [['part','00123'],['revision','09'],['po','1234567890123456789'],['customerPart','=1+1'],['customerRevision','']]){const c=sheet[utils.encode_cell({r:1,c:cols.indexOf(k)})];assert.equal(c.t,'s');assert.equal(c.v,v);assert.equal(c.f,undefined);}});
+test('Excel price numbers display four decimal places while exact source amounts stay text',()=>{const wb=read(exportExcel(report(),['history']),{type:'array',cellNF:true});const sh=wb.Sheets[wb.SheetNames[0]],cols=SCHEMAS.history;const c=sh[utils.encode_cell({r:1,c:cols.indexOf('price')})];assert.equal(c.t,'n');assert.equal(c.z,'0.0000');assert.equal(sh[utils.encode_cell({r:1,c:cols.indexOf('sourcePrice')})].t,'s');});
+test('Excel round trip retains bilingual headers, explanations, row counts, and filter',()=>{const r=report(),wb=read(exportExcel(r),{type:'array'});for(const name of REPORTS){const sh=wb.Sheets[SHEET_NAMES[name]],data=utils.sheet_to_json(sh,{header:1});assert.equal(data.length,r[name].length+1);assert.match(data[0][0],/Part No\. \/ 零件号/);assert.ok(sh['!autofilter']);}const issueSheet=utils.sheet_to_json(wb.Sheets[SHEET_NAMES.issues],{header:1});assert.ok(issueSheet[1].some(v=>String(v).includes(' / ')));});
