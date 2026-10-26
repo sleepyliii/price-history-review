@@ -1,5 +1,5 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.4.0';
+export const VERSION = '4.4.1';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
 export const REPORTS=['currentPrices','priceChanges','overlaps','issues','history','gmCurrent','gmConsistency'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
@@ -8,6 +8,7 @@ const isSpotBuy=r=>r.PCN==='269388'&&r.PO_Type_Key==='2501'&&['Other','Spot Buy'
 const GM_FIELDS=['Ship_To_Key','Ship_To_Code','Ship_To_Releases','Ship_To_Active'];
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ comparisonActiveNew:['Same-day inactive correction prices excluded from the new-price candidates','同日 inactive 更正记录不作为新价候选'],
  currentPrice:['One distinct Active price on the period end date','检查结束日有一个不同的 Active 有效售价'],
  currentNoPrice:['No Active price on period end, although a price existed during the period','期间内曾有有效价，但检查结束日没有有效价'],
  currentNoPeriodPrice:['No Active price in the review period; excluded','整期无 Active 有效价，已排除'],
@@ -249,16 +250,20 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   }
   const rec=[...dedup.values()],coverage={...base,status:invalid?'paused':'complete',rawRows:rr.length,intervals:rec.length,changeCount:'',overlapCount:''};
   if(!invalid){
-   const batches=groupBy(rec,r=>r.start);let previous=null,previousRecords=[],previousDay=null,pending=false;const oldChanges=report.priceChanges.length,oldOverlaps=report.overlaps.length;
+   const batches=groupBy(rec,r=>r.start),activeBatches=groupBy([...activeDedup.values()],r=>r.start);let previous=null,previousRecords=[],previousDay=null,pending=false;const oldChanges=report.priceChanges.length,oldOverlaps=report.overlaps.length;
    for(const day of [...batches.keys()].sort((a,b)=>a-b)){
     const prices=sortedPrices(new Set(batches.get(day).map(r=>r.price)));
-    if(day>=start&&day<=end&&(previous===null||key(previous)!==key(prices))){
+    const activePrices=sortedPrices(new Set((activeBatches.get(day)||[]).map(r=>r.price)));
+    // Current Active identifies same-day corrections, while prior inactive history remains available.
+    const newPrices=!activeInvalid&&prices.length>1&&activePrices.length?activePrices:prices;
+    if(day>=start&&day<=end&&(previous===null||key(previous)!==key(newPrices))){
      if(previous===null){issue(first,'firstPrice',iso(day));pending=true;}
      else{
       let oldPrices=previous,note='comparison';
       if(previous.length>1){const expiring=sortedPrices(new Set(previousRecords.filter(r=>r.end===day-1).map(r=>r.price)));if(expiring.length===1){oldPrices=expiring;note='comparisonExpiration';}}
-      if(oldPrices.length!==1||prices.length!==1){issue(first,'ambiguousPrice','New effective date / 新价生效日: '+iso(day)+'; Previous effective date / 前序生效日: '+iso(previousDay)+'; Previous prices / 前序售价: '+previous.map(formatPrice).join('; ')+'; New prices / 新售价: '+prices.map(formatPrice).join('; '));pending=true;}
-      else if(compare(oldPrices[0],prices[0])!==0)report.priceChanges.push({...base,effective:iso(day),oldPrice:oldPrices[0],newPrice:prices[0],difference:subtract(prices[0],oldPrices[0]),note});
+      if(newPrices.length<prices.length)note+='|comparisonActiveNew';
+      if(oldPrices.length!==1||newPrices.length!==1){issue(first,'ambiguousPrice','New effective date / 新价生效日: '+iso(day)+'; Previous effective date / 前序生效日: '+iso(previousDay)+'; Previous prices / 前序售价: '+previous.map(formatPrice).join('; ')+'; New prices / 新售价: '+newPrices.map(formatPrice).join('; '));pending=true;}
+      else if(compare(oldPrices[0],newPrices[0])!==0)report.priceChanges.push({...base,effective:iso(day),oldPrice:oldPrices[0],newPrice:newPrices[0],difference:subtract(newPrices[0],oldPrices[0]),note});
      }
     }
     previous=prices;previousRecords=batches.get(day);previousDay=day;

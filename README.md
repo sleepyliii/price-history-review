@@ -41,6 +41,8 @@ For GM current-price consistency, exclude selected PO/Ship-to rows with no Activ
 
 Different Active prices effective on the same PO at period end require confirmation; no price is chosen automatically. The overlap report is retained. / 同一 PO 在结束日存在多个不同 Active 有效价时列入待确认，不自动选价；保留重叠报告。
 
+For same-day new-price corrections, use Active candidates when present; inactive records stay in history. Historical previous-price comparisons are preserved. / 同日新价有更正记录且存在 Active 候选时，仅用 Active 新价比较；inactive 仍保留历史，前序历史价格比较保持原规则。
+
 ## Reports / 输出
 
 Current PO prices · Price changes · Overlapping prices · Items requiring confirmation · Price history · GM current prices · GM price consistency

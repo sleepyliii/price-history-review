@@ -1,4 +1,4 @@
-import {REQUIRED,SCHEMAS,REPORTS,COLUMNS,message,cell,parseCSV,toCSV} from './engine.js?v=4.4';
+import {REQUIRED,SCHEMAS,REPORTS,COLUMNS,message,cell,parseCSV,toCSV} from './engine.js?v=4.4.1';
 import {zipFiles} from './zip.js';
 const $=id=>document.getElementById(id);
 const labels={
@@ -33,7 +33,7 @@ function run(){
  clearReport();if(partsPending){setError({label:'selectSheet'});return;}if(!source){setError({label:'chooseFile'});return;}const list=scope();if(!list.length){setError({code:'invalidScope'});return;}
  lock(true);progress('reading');
  source.arrayBuffer().then(buffer=>{
-  worker?.terminate();worker=new Worker(new URL('./worker.js?v=4.4',import.meta.url),{type:'module'});
+  worker?.terminate();worker=new Worker(new URL('./worker.js?v=4.4.1',import.meta.url),{type:'module'});
   worker.onmessage=({data})=>{if(data.stage)progress(data.stage);if(data.error){setError(data.error);progressKey='';$('progress').hidden=true;lock(false);worker.terminate();}if(data.report){report=data.report;active=report.issues.length?'issues':'currentPrices';page=0;lock(false);progress('done');renderResults();worker.terminate();}};
   worker.onerror=()=>{setError({label:'workerFailed'});lock(false);$('progress').hidden=true;worker.terminate();};
   worker.postMessage({buffer,scope:list,start:$('start').value,end:$('end').value,source:source.name},[buffer]);
