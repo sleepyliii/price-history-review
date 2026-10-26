@@ -1,10 +1,13 @@
 // Browser-local price review. No network requests or external dependencies.
-export const VERSION = '4.1.0';
+export const VERSION = '4.2.0';
 export const GM_CUSTOMERS = ['GMNA','GM-NA 1','GMCCA','GM Canada SPO','GM Henniges','GM Henniges SPO'];
 const isGM=r=>GM_CUSTOMERS.includes(r.customer_code);
+// Validated against the supplied Plex Spot Buy PO screenshots and their CSV keys.
+const isSpotBuy=r=>r.PCN==='269388'&&r.PO_Type_Key==='2501'&&['Other','Spot Buy'].includes(r.PO_Type);
 const GM_FIELDS=['Ship_To_Key','Ship_To_Code','Ship_To_Releases','Ship_To_Active'];
 export const REQUIRED = ['PCN','Minth_Part_No','revision','customer_code','po_no','po_key','part_key','po_line_key','price_key','PO_Date','PO_Type_Key','PO_Type','Releases','Price','Raw_Price','unit','currency_code','effective_date','expiration_date','Component_Count','Component_Needs_Review','customer_part_no','customer_part_revision'];
 export const messages = {
+ spotBuyExcluded:['Spot Buy excluded from price comparison','Spot Buy 已排除，不参与售价比较'],
  gmMetadata:['GM Ship-to fields are missing; re-export with the updated SQL','缺少 GM Ship-to 信息，请用新版 SQL 重新导出'],
  gmAddress:['Missing or inactive approved GM Ship-to; confirmation required','GM 批准收货地址缺失或非 Active，需要确认'],
  gmBatch:['Latest GM Blanket batch with positive Ship-to Releases; same-day POs retained','最新 GM Blanket 批次，Ship-to Releases > 0；保留同日多个 PO'],
@@ -116,7 +119,7 @@ export function overlapping(records,start,end){
  return out;
 }
 function buildGMReports(report,matched,selected,asOf,issue){
- const gmRows=matched.filter(isGM),selectedByBranch=groupBy(selected.filter(isGM),selectionKey);
+ const gmRows=matched.filter(r=>isGM(r)&&!isSpotBuy(r)),selectedByBranch=groupBy(selected.filter(isGM),selectionKey);
  for(const [branch,source]of groupBy(gmRows,selectionKey)){
   const chosen=selectedByBranch.get(branch)||[];
   if(!chosen.length){report.gmCurrent.push({...context(source[0]),po:'',poKey:'',lineKey:'',asOf:iso(asOf),price:'',priceKeys:'',status:'review',reason:'gmUnselected'});continue;}
@@ -168,14 +171,20 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
  const issue=(r,code,details='')=>report.issues.push({...context(r),priceKey:r.price_key||'',sourceRow:r._line||'',code,details});
  for(const s of scope)if(!matched.some(r=>r.Minth_Part_No===s.PartNo&&normalizeRevision(r.revision)===s.Revision))issue({Minth_Part_No:s.PartNo,revision:s.Revision},'missingScope');
  const blocked=new Set();
- for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key,isGM(r)?r.Ship_To_Key||'':'')).values())if(rr.length>1)for(const r of rr){blocked.add(selectionKey(r));issue(r,'duplicate');}
+ const comparable=matched.filter(r=>!isSpotBuy(r));
+ for(const rr of groupBy(comparable,r=>key(r.PCN,r.price_key,isGM(r)?r.Ship_To_Key||'':'')).values())if(rr.length>1)for(const r of rr){blocked.add(selectionKey(r));issue(r,'duplicate');}
  // A shared GM price_key may repeat across addresses, but its source price must agree.
- for(const rr of groupBy(matched,r=>key(r.PCN,r.price_key)).values())if(rr.some(isGM)&&['part_key','Minth_Part_No','revision','po_key','po_line_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Price','Raw_Price','Price_Active','effective_date','expiration_date','unit','currency_code','customer_part_no','customer_part_revision'].some(f=>new Set(rr.map(r=>['Price','Raw_Price'].includes(f)?priceIdentity(r[f]):r[f])).size>1))for(const r of rr){blocked.add(selectionKey(r));issue(r,'metadata');}
+ for(const rr of groupBy(comparable,r=>key(r.PCN,r.price_key)).values())if(rr.some(isGM)&&['part_key','Minth_Part_No','revision','po_key','po_line_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Price','Raw_Price','Price_Active','effective_date','expiration_date','unit','currency_code','customer_part_no','customer_part_revision'].some(f=>new Set(rr.map(r=>['Price','Raw_Price'].includes(f)?priceIdentity(r[f]):r[f])).size>1))for(const r of rr){blocked.add(selectionKey(r));issue(r,'metadata');}
  const selected=[];
  for(const [pk,pr]of groupBy(matched,selectionKey)){
   const candidates=[];let block=blocked.has(pk);
   for(const rr of groupBy(pr,r=>r.po_line_key).values()){
    const r=rr[0],gm=isGM(r),item={...context(r),poDate:r.PO_Date,type:r.PO_Type,releases:gm?r.Ship_To_Releases:r.Releases,status:'excluded',reason:'',details:''};report.poSelection.push(item);
+   if(rr.every(isSpotBuy)){
+    item.type='Spot Buy';item.reason='spotBuyExcluded';
+    report.coverage.push({...context(r),status:'excluded',reason:'spotBuyExcluded',rawRows:rr.length,intervals:0,changeCount:'',overlapCount:''});
+    continue;
+   }
    const meta=['po_key','PO_Date','PO_Type_Key','PO_Type','Releases','customer_code','Minth_Part_No','revision',...(gm?GM_FIELDS:[])];
    if(meta.some(f=>new Set(rr.map(x=>f==='revision'?normalizeRevision(x[f]):x[f])).size>1)){issue(r,'metadata');block=true;item.status='review';item.reason='metadata';continue;}
    try{
@@ -183,7 +192,7 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
     if(gm&&(!r.Ship_To_Key||!r.Ship_To_Code||r.Ship_To_Active!=='1'))fail('gmAddress');
     const rel=decimal(gm?r.Ship_To_Releases:r.Releases);if(compare(rel,'0')<0)fail('negativeReleases');
     if(r.PCN!=='269388')fail('unknownPCN',r.PCN);
-    if(r.PO_Type!==(r.PO_Type_Key==='2500'?'Blanket':'Other'))fail('typeMismatch');
+    if(r.PO_Type!==(r.PO_Type_Key==='2500'?'Blanket':r.PO_Type_Key==='2501'?'Spot Buy':'Other')&&!isSpotBuy(r))fail('typeMismatch');
     if(r.PO_Type!=='Blanket'){item.reason='notBlanket';continue;}
     candidates.push({rel,item,rr});
    }catch(e){const x=errorInfo(e);issue(r,x.code,x.details);block=true;item.status='review';item.reason=x.code;item.details=x.details||'';}
@@ -193,7 +202,8 @@ export function analyze(rows,headers,scope,startText,endText,sourceName='') {
   for(const x of candidates)if(!pool.includes(x))x.item.reason='noReleases';
   for(const x of pool){try{const day=parseDate(x.rr[0].PO_Date,true);if(day===null)fail('badPODate');x.day=day;x.item.poDate=iso(day);}catch(e){const info=errorInfo(e);issue(x.rr[0],info.code,info.details);block=true;x.item.status='review';x.item.reason=info.code;x.item.details=info.details||'';}}
   if(block){for(const x of pool){if(x.item.status!=='review'){x.item.status='paused';x.item.reason='blocked';}}}
-  else if(!pool.length)issue(pr[0],'noPO');
+  else if(!pool.length&&!pr.every(isSpotBuy))issue(pr[0],'noPO');
+  else if(!pool.length)continue;
   else{
    const latest=Math.max(...pool.map(x=>x.day)),winners=pool.filter(x=>x.day===latest);
    for(const x of pool){if(x.day<latest)x.item.reason='older';else if(winners.length>1&&!isGM(pr[0])){x.item.status='review';x.item.reason='tie';}else{x.item.status='selected';x.item.reason=isGM(pr[0])?(hasPositive?'gmBatch':'gmZeroBatch'):(hasPositive?'eligible':'fallbackZero');selected.push(...x.rr);}}
@@ -245,6 +255,7 @@ export const SCHEMAS={poSelection:['part','revision','customer','po','poDate','t
 Object.assign(COLUMNS,{shipTo:['Ship-to','收货地址'],shipToKey:['Ship-to key','收货地址键'],asOf:['As-of date','基准日'],priceKeys:['Current price keys','当前价格键'],commonPrice:['Common effective price','共同有效售价'],branchCount:['Customer/Ship-to branches','客户／地址分支数'],poCount:['Selected PO lines/Ship-tos','选中PO明细／地址数'],gmMembers:['Branch / PO price details','分支／PO售价明细']});
 Object.assign(COLUMNS,{sourcePrice:['Original source Price','原始Price'],sourceRawPrice:['Original source Raw_Price','原始Raw_Price']});
 SCHEMAS.history.push('sourcePrice','sourceRawPrice');
+SCHEMAS.coverage.splice(SCHEMAS.coverage.indexOf('status')+1,0,'reason');
 for(const name of Object.keys(SCHEMAS)){const at=SCHEMAS[name].indexOf('customer');if(at>=0)SCHEMAS[name].splice(at+1,0,'shipTo','shipToKey');}
 SCHEMAS.gmCurrent=['part','revision','customer','shipTo','po','asOf','price','currency','unit','status','reason','priceKeys','shipToKey',...TRACE];
 SCHEMAS.gmConsistency=['part','revision','asOf','commonPrice','currency','unit','status','reason','distinctCount','prices','difference','branchCount','poCount','gmMembers','pcn'];

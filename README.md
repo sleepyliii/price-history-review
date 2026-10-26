@@ -33,6 +33,8 @@ GM group: GMNA, GM-NA 1, GMCCA, GM Canada SPO, GM Henniges, GM Henniges SPO. Re-
 
 All customer/PO prices are rounded half-up to four decimal places before changes, overlaps and GM consistency checks. Original amounts remain in the history export. / 所有客户及 PO 的售价均先四舍五入至四位，再检查调价、重叠及 GM 一致性；历史导出保留原始金额。
 
+Spot Buy POs and Spot Buy-only branches are excluded from comparison, not treated as unresolved Blanket candidates. Legacy `Other` exports with validated PCN 269388 / type key 2501 are supported. Other unconfirmed types remain pending. / Spot Buy PO 及只有 Spot Buy 的分支不参与比较，不进入待确认；兼容旧导出的 Other＋2501，其他未确认类型仍需核对。
+
 ## Reports / 输出
 
 PO selection · Price changes · Overlapping prices · Processing status · Items requiring confirmation · Price history · GM current prices · GM price consistency
@@ -44,6 +46,7 @@ PO 筛选 · 售价变动 · 多个有效售价 · 处理状态 · 待确认 · 
 `python -m http.server 8766 --bind 127.0.0.1` · `node --test engine.test.mjs parts-import.test.mjs gm.test.mjs precision.test.mjs`
 
 GitHub Pages: `main` → `/ (root)`.
+
 
 
 

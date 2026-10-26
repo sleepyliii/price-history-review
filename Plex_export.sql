@@ -10,6 +10,7 @@ Blanket type key 2500 is validated for PCN 269388.
 */
 
 DECLARE @BlanketPOTypeKey INT = 2500;
+DECLARE @SpotBuyPOTypeKey INT = 2501;
 DECLARE @PartFilter VARCHAR(100) = '';
 DECLARE @CustomerFilter VARCHAR(100) = '';
 DECLARE @CustomerPartFilter VARCHAR(100) = '';
@@ -97,7 +98,9 @@ SELECT
     PO.po_no,
     PO.PO_Date AS PO_Date,
     PO.PO_Type_Key AS PO_Type_Key,
-    CASE WHEN PO.PO_Type_Key = @BlanketPOTypeKey THEN 'Blanket' ELSE 'Other' END AS PO_Type,
+    CASE WHEN PO.PO_Type_Key = @BlanketPOTypeKey THEN 'Blanket'
+         WHEN PO.PO_Type_Key = @SpotBuyPOTypeKey THEN 'Spot Buy'
+         ELSE 'Other' END AS PO_Type,
     P.part_key,
     P.part_no AS Minth_Part_No,
     P.name AS Minth_Part_Name,
